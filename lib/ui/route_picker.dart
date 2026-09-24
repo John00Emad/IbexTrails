@@ -162,8 +162,8 @@ class RouteSummary extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final facts = [
       formatDistance(route.length),
-      if (route.hasElevation) '↑ ${route.totalAscent.round()} m',
-      if (route.hasElevation) '↓ ${route.totalDescent.round()} m',
+      if (route.hasElevation) 'D+ ${route.totalAscent.round()} m',
+      if (route.hasElevation) 'D− ${route.totalDescent.round()} m',
       if (route.isLoop) 'loop',
       if (route.waypoints.isNotEmpty) '${route.waypoints.length} waypoints',
     ];

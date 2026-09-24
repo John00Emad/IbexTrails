@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -7,8 +8,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../core/checkpoints.dart';
+import '../core/course.dart';
 import '../core/crypto.dart';
 import '../core/event_code.dart';
+import '../core/fuel.dart';
 import '../core/geo.dart';
 import '../core/gpx.dart';
 import '../core/group.dart';
@@ -30,7 +34,11 @@ class RunSession extends ChangeNotifier {
     required this.role,
     this.code,
     this.locationSource,
-  });
+    this.startedAt,
+  }) {
+    notifier.onAction = (action, payload) =>
+        handleNotificationAction(action, payload, DateTime.now());
+  }
 
   /// Replaces the device GPS, for tests and simulations.
   @visibleForTesting
@@ -67,6 +75,25 @@ class RunSession extends ChangeNotifier {
   bool _eventInfoDirty = false;
   final DateTime joinedAt = DateTime.now();
 
+  // ---- Courses & checkpoints --------------------------------------------
+  /// Courses (distances) received or created, by id.
+  final Map<String, Course> courses = {};
+  final Map<String, DateTime> _courseUpdated = {};
+  final Set<String> _dirtyCourses = {};
+
+  /// The course this device is navigating.
+  Course? course;
+  CheckpointTracker? checkpoints;
+  CheckpointOutlook? outlook;
+  final Set<String> _riskNotified = {};
+  final Set<String> _missedNotified = {};
+
+  // ---- Fuelling (private to this device) ---------------------------------
+  FuelCoach? fuel;
+
+  /// Reminder currently shown in the app, until logged or dismissed.
+  FuelReminder? fuelReminder;
+
   // ---- Navigation --------------------------------------------------------
   TrailRoute? route;
   RouteMatcher? _matcher;
@@ -85,6 +112,7 @@ class RunSession extends ChangeNotifier {
   RunnerStatus? _lastSentStatus;
   Timer? _reportTimer;
   Timer? _alertTimer;
+  Timer? _tick;
   StreamSubscription<Position>? _positionSub;
   StreamSubscription<RelayMessage>? _messageSub;
   bool _disposed = false;
@@ -106,7 +134,10 @@ class RunSession extends ChangeNotifier {
       role: Role.runner,
       locationSource: locationSource,
     );
-    if (route != null) s._setRoute(route);
+    // A solo run always starts fresh.
+    settings.setRunData('fuel:solo', null);
+    settings.setRunData('cp:solo', null);
+    if (route != null) s._useCourse(Course.fromRoute(route, id: _localCourse));
     await s._startTracking();
     return s;
   }
@@ -117,7 +148,7 @@ class RunSession extends ChangeNotifier {
     AppSettings settings,
     Notifier notifier, {
     required String eventName,
-    TrailRoute? route,
+    List<Course> courses = const [],
     @visibleForTesting Stream<Position> Function()? locationSource,
   }) async {
     final code = normalizeEventCode(generateEventCode())!;
@@ -128,20 +159,24 @@ class RunSession extends ChangeNotifier {
       code: code,
       locationSource: locationSource,
     );
-    // Round-trip through the share encoding so the organizer navigates the
-    // exact same geometry as everyone else (progress must be comparable).
-    final shared = route == null
-        ? null
-        : TrailRoute.fromShareJson(route.toShareJson());
+    final now = DateTime.now();
+    for (final c in courses) {
+      // Round-trip through the share encoding so the organizer navigates
+      // the exact same geometry as everyone else (progress must match).
+      final shared = Course.fromShareJson(c.toShareJson());
+      s.courses[shared.id] = shared;
+      s._courseUpdated[shared.id] = now;
+      s._dirtyCourses.add(shared.id);
+    }
     s.event = EventInfo(
       name: eventName,
       organizerId: settings.participantId,
       organizerName: s.myName,
       organizerPhone: settings.phone,
-      updated: DateTime.now(),
-      route: shared,
+      updated: now,
+      courses: [for (final c in s.courses.values) c.info],
     );
-    if (shared != null) s._setRoute(shared);
+    if (s.courses.isNotEmpty) s.selectCourse(s.courses.keys.first);
     s._eventInfoDirty = true;
     await s._connect();
     await s._startTracking();
@@ -154,6 +189,7 @@ class RunSession extends ChangeNotifier {
     Notifier notifier, {
     required String code,
     required Role role,
+    DateTime? startedAt,
     @visibleForTesting Stream<Position> Function()? locationSource,
   }) async {
     final normalized = normalizeEventCode(code);
@@ -166,6 +202,7 @@ class RunSession extends ChangeNotifier {
       role: role,
       code: normalized,
       locationSource: locationSource,
+      startedAt: startedAt,
     );
     await s._connect();
     await s._startTracking();
@@ -177,7 +214,13 @@ class RunSession extends ChangeNotifier {
     AppSettings settings,
     Notifier notifier,
     ActiveEvent active,
-  ) => join(settings, notifier, code: active.code, role: active.role);
+  ) => join(
+    settings,
+    notifier,
+    code: active.code,
+    role: active.role,
+    startedAt: active.startedAt,
+  );
 
   String get displayCode => code == null ? '' : formatEventCode(code!);
 
@@ -187,6 +230,8 @@ class RunSession extends ChangeNotifier {
 
   Future<void> _startTracking() async {
     startedAt ??= DateTime.now();
+    if (fuel == null) _startFuel();
+    _tick ??= Timer.periodic(const Duration(seconds: 10), (_) => _onTick());
     final source = locationSource;
     if (source == null) {
       await notifier.requestPermission();
@@ -254,6 +299,7 @@ class RunSession extends ChangeNotifier {
       final before = match;
       match = matcher.update(here, accuracy: p.accuracy);
       _reactToMatch(before, match!);
+      _updateCheckpoints(match!, here, DateTime.now());
     }
 
     if (prevFix == null && isEvent) _publishReport();
@@ -310,6 +356,56 @@ class RunSession extends ChangeNotifier {
     }
   }
 
+  void _updateCheckpoints(RouteMatch m, GeoPoint here, DateTime now) {
+    final tracker = checkpoints;
+    if (tracker == null) return;
+    final passed = tracker.update(m, here, now);
+    outlook = tracker.outlook(now, runnerStart: startedAt);
+    if (passed.isNotEmpty) {
+      settings.setRunData('cp:$_runKey:${course!.id}', {
+        for (final e in tracker.passed.entries)
+          e.key: e.value.millisecondsSinceEpoch,
+      });
+      final cp = passed.last;
+      final cutoff = course!.cutoffTime(cp, runnerStart: startedAt);
+      final spare = cutoff == null
+          ? ''
+          : ' · ${_minutes(cutoff.difference(now))} before the cut-off';
+      notifier.info(
+        NoteId.checkpoint,
+        '${cp.name} ✓',
+        'Passed at ${_clock(now)}$spare.',
+      );
+      _publishReport();
+    }
+    final o = outlook;
+    if (o != null && o.atRisk && !o.isMissed(now)) {
+      if (_riskNotified.add(o.checkpoint.id)) {
+        HapticFeedback.heavyImpact();
+        notifier.alert(
+          NoteId.cutoff,
+          'Behind cut-off pace',
+          'At this pace you reach ${o.checkpoint.name} at ${_clock(o.eta)}, '
+              '${_minutes(-o.margin!)} after the ${_clock(o.cutoff!)} cut-off.',
+        );
+      }
+    }
+  }
+
+  void _checkMissedCutoffs(DateTime now) {
+    final tracker = checkpoints;
+    if (tracker == null) return;
+    for (final cp in tracker.missed(now, runnerStart: startedAt)) {
+      if (!_missedNotified.add(cp.id)) continue;
+      notifier.alert(
+        NoteId.cutoff,
+        'Cut-off passed: ${cp.name}',
+        'The cut-off was ${_clock(course!.cutoffTime(cp, runnerStart: startedAt)!)}. '
+            'Check in with the organizer.',
+      );
+    }
+  }
+
   RunnerStatus get status {
     if (sos) return RunnerStatus.sos;
     final m = match;
@@ -337,24 +433,237 @@ class RunSession extends ChangeNotifier {
     }
   }
 
-  /// Load a route locally. For the organizer this also shares it with the
-  /// group; for others it only affects this device.
+  static const _localCourse = 'local';
+
+  /// Key for per-run saved state.
+  String get _runKey => code ?? 'solo';
+
+  /// Courses in the order the organizer listed them.
+  List<Course> get courseList {
+    final order = [for (final c in event?.courses ?? const []) c.id];
+    int rank(Course c) {
+      final i = order.indexOf(c.id);
+      return i < 0 ? order.length : i;
+    }
+
+    return courses.values.toList()..sort((a, b) => rank(a).compareTo(rank(b)));
+  }
+
+  /// The event offers several distances and this runner hasn't picked one.
+  bool get needsCourseChoice =>
+      isEvent && course == null && courseList.length > 1;
+
+  /// Switch to course [id] (e.g. the 25 km).
+  void selectCourse(String id) {
+    final c = courses[id];
+    if (c == null) return;
+    _useCourse(c);
+    if (code != null) settings.setCourseFor(code!, id);
+    _publishReport();
+    notifyListeners();
+  }
+
+  /// Navigate [c]. With [keepProgress] (same course, updated by the
+  /// organizer) route matching and checkpoint passes carry over.
+  void _useCourse(Course c, {bool keepProgress = false}) {
+    final sameRoute =
+        keepProgress &&
+        route != null &&
+        listEquals(route!.points, c.route.points);
+    final previous = checkpoints;
+    course = c;
+    if (!sameRoute) _setRoute(c.route);
+    final tracker = CheckpointTracker(c);
+    if (keepProgress && previous != null) {
+      tracker.restore({
+        for (final e in previous.passed.entries)
+          if (c.checkpoints.any((cp) => cp.id == e.key)) e.key: e.value,
+      });
+    } else {
+      final saved = settings.runData('cp:$_runKey:${c.id}');
+      if (saved is Map) {
+        tracker.restore({
+          for (final e in saved.entries)
+            e.key as String: DateTime.fromMillisecondsSinceEpoch(
+              (e.value as num).toInt(),
+            ),
+        });
+      }
+      _riskNotified.clear();
+      _missedNotified.clear();
+    }
+    checkpoints = tracker;
+    outlook = null;
+  }
+
+  /// Picks the course automatically when there is no real choice, or the
+  /// runner already chose one earlier.
+  void _autoSelectCourse() {
+    if (course != null || courses.isEmpty) return;
+    final saved = code == null ? null : settings.courseFor(code!);
+    if (saved != null && courses.containsKey(saved)) {
+      selectCourse(saved);
+    } else if (event != null && event!.courses.length <= 1) {
+      selectCourse(courses.keys.first);
+    }
+  }
+
+  /// Load a route locally. For the organizer this adds it as a course and
+  /// shares it with the group; for others it only affects this device.
   void useRoute(TrailRoute r) {
     if (isOrganizer) {
-      final shared = TrailRoute.fromShareJson(r.toShareJson());
-      _setRoute(shared);
-      event = EventInfo(
-        name: event?.name ?? 'Group run',
-        organizerId: myId,
-        organizerName: myName,
-        organizerPhone: settings.phone,
-        updated: DateTime.now(),
-        route: shared,
-      );
-      _eventInfoDirty = true;
-      _flushEventInfo();
+      addCourse(r);
     } else {
-      _setRoute(r);
+      _useCourse(Course.fromRoute(r, id: _localCourse));
+    }
+    notifyListeners();
+  }
+
+  /// Organizer: add a distance to the event and switch to it.
+  void addCourse(TrailRoute r) {
+    var n = courses.length + 1;
+    while (courses.containsKey('c$n')) {
+      n++;
+    }
+    final shared = Course.fromShareJson(
+      Course.fromRoute(r, id: 'c$n').toShareJson(),
+    );
+    updateCourse(shared);
+    selectCourse(shared.id);
+  }
+
+  /// Organizer: publish a new or edited course (name, start, checkpoints).
+  void updateCourse(Course c) {
+    courses[c.id] = c;
+    _courseUpdated[c.id] = DateTime.now();
+    _dirtyCourses.add(c.id);
+    if (course?.id == c.id) _useCourse(c, keepProgress: true);
+    final e = event;
+    event = EventInfo(
+      name: e?.name ?? 'Group run',
+      organizerId: myId,
+      organizerName: myName,
+      organizerPhone: settings.phone,
+      updated: DateTime.now(),
+      courses: [for (final c in courseList) c.info],
+    );
+    _eventInfoDirty = true;
+    _flushEventInfo();
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------------
+  // Fuelling. Never leaves this device.
+  // ------------------------------------------------------------------------
+
+  void _startFuel() {
+    final start = startedAt ?? DateTime.now();
+    final saved = settings.runData('fuel:$_runKey');
+    var log = FuelLog();
+    if (saved is Map && saved['start'] == start.millisecondsSinceEpoch) {
+      log = FuelLog.fromJson(saved['log'] as List);
+    }
+    fuel = FuelCoach(plan: settings.fuelPlan, log: log, start: start);
+  }
+
+  void _saveFuel() {
+    final f = fuel;
+    if (f == null) return;
+    settings.setRunData('fuel:$_runKey', {
+      'start': f.start.millisecondsSinceEpoch,
+      'log': f.log.toJson(),
+    });
+  }
+
+  /// The next aid station or water point, with arrival time.
+  UpcomingStop? get _upcomingStop {
+    final tracker = checkpoints;
+    final m = match;
+    if (tracker == null || m == null) return null;
+    for (final cp in course!.checkpoints) {
+      if (cp.along < m.along || tracker.passed.containsKey(cp.id)) continue;
+      if (!cp.kind.refuels) continue;
+      return UpcomingStop(
+        cp.name,
+        tracker.pace.arrival(DateTime.now(), m.along, cp.along),
+      );
+    }
+    return null;
+  }
+
+  void logFuel(FuelItem item, {int servings = 1, DateTime? at}) {
+    final f = fuel;
+    if (f == null) return;
+    for (var i = 0; i < servings; i++) {
+      f.log.add(FuelEntry.of(item, at ?? DateTime.now()));
+    }
+    fuelReminder = null;
+    notifier.cancel(NoteId.fuel);
+    _saveFuel();
+    notifyListeners();
+  }
+
+  void undoFuel() {
+    fuel?.log.undo();
+    _saveFuel();
+    notifyListeners();
+  }
+
+  void snoozeFuel([Duration by = const Duration(minutes: 5)]) {
+    fuel?.snooze(DateTime.now(), by);
+    fuelReminder = null;
+    notifier.cancel(NoteId.fuel);
+    notifyListeners();
+  }
+
+  void dismissFuelReminder() {
+    fuelReminder = null;
+    notifyListeners();
+  }
+
+  /// Handles a notification button ("Ate it", "In 5 min").
+  void handleNotificationAction(String? action, String? payload, DateTime at) {
+    final f = fuel;
+    if (f == null) return;
+    if (action == NoteAction.fuelSnooze) {
+      f.snooze(at, const Duration(minutes: 5));
+      fuelReminder = null;
+    } else if (action == NoteAction.fuelAte && payload != null) {
+      try {
+        final servings = (jsonDecode(payload) as Map)['s'] as List;
+        for (final s in servings.cast<List>()) {
+          final item = f.plan.item(s[0] as String);
+          if (item != null) {
+            logFuel(item, servings: (s[1] as num).toInt(), at: at);
+          }
+        }
+      } on Object {
+        return;
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<void> _onTick() async {
+    if (_disposed) return;
+    final now = DateTime.now();
+    for (final a in await settings.takePendingActions()) {
+      handleNotificationAction(
+        a['a'] as String?,
+        a['p'] as String?,
+        DateTime.fromMillisecondsSinceEpoch((a['t'] as num).toInt()),
+      );
+    }
+    _checkMissedCutoffs(now);
+    final f = fuel;
+    if (f != null) {
+      f.plan = settings.fuelPlan;
+      final r = f.due(now, stop: _upcomingStop);
+      if (r != null) {
+        fuelReminder = r;
+        HapticFeedback.mediumImpact();
+        notifier.fuel(r);
+      }
     }
     notifyListeners();
   }
@@ -396,10 +705,27 @@ class RunSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Publishes the event info and any changed courses (organizer only).
   Future<void> _flushEventInfo() async {
     final info = event;
     final r = relay;
-    if (!_eventInfoDirty || info == null || r == null || !isOrganizer) return;
+    if (info == null || r == null || !isOrganizer || !r.isOnline) return;
+    for (final id in _dirtyCourses.toList()) {
+      final c = courses[id];
+      if (c == null) continue;
+      final payload = await _cipher!.seal(
+        CourseUpdate(c, _courseUpdated[id]!).toJson(),
+      );
+      if (r.publish(
+        topics!.course(id),
+        payload,
+        retain: true,
+        reliable: true,
+      )) {
+        _dirtyCourses.remove(id);
+      }
+    }
+    if (!_eventInfoDirty) return;
     final payload = await _cipher!.seal(info.toJson());
     if (r.publish(topics!.event, payload, retain: true, reliable: true)) {
       _eventInfoDirty = false;
@@ -430,6 +756,11 @@ class RunSession extends ChangeNotifier {
       offBy: m?.distance,
       status: status,
       battery: battery,
+      course: course?.id == _localCourse ? null : course?.id,
+      passes: checkpoints?.passed ?? const {},
+      next: outlook?.checkpoint.id,
+      eta: outlook?.eta,
+      started: startedAt,
       // The last trail point is the current position; don't repeat it.
       trail: _pendingTrail.length > 1
           ? _pendingTrail.sublist(0, _pendingTrail.length - 1)
@@ -469,10 +800,29 @@ class RunSession extends ChangeNotifier {
       if (current != null && !info.updated.isAfter(current.updated)) return;
       event = info;
       eventEnded = false;
-      final r = info.route;
-      // The organizer keeps their own copy, except when resuming after the
-      // app was closed.
-      if (r != null && (!isOrganizer || route == null)) _setRoute(r);
+      final legacy = info.legacyRoute;
+      if (legacy != null && courses.isEmpty) {
+        courses['c1'] = Course.fromRoute(legacy, id: 'c1');
+      }
+      _autoSelectCourse();
+      notifyListeners();
+      return;
+    }
+
+    final cid = t.courseOf(m.topic);
+    if (cid != null) {
+      if (m.payload.isEmpty) {
+        courses.remove(cid);
+      } else {
+        final u = CourseUpdate.fromJson(await cipher.open(m.payload));
+        if (u == null || u.course.id != cid) return;
+        final prev = _courseUpdated[cid];
+        if (prev != null && !u.updated.isAfter(prev)) return;
+        courses[cid] = u.course;
+        _courseUpdated[cid] = u.updated;
+        if (course?.id == cid) _useCourse(u.course, keepProgress: true);
+        _autoSelectCourse();
+      }
       notifyListeners();
       return;
     }
@@ -506,7 +856,7 @@ class RunSession extends ChangeNotifier {
 
   void _evaluateAlerts() {
     final all = group
-        .alerts(DateTime.now(), alertPolicy)
+        .alerts(DateTime.now(), alertPolicy, courseOf: (id) => courses[id])
         .where((a) => a.participant.id != myId)
         .toList();
     alerts = all;
@@ -585,6 +935,9 @@ class RunSession extends ChangeNotifier {
       if (endEvent && isOrganizer) {
         r.clearRetained(topics!.event);
         r.clearRetained(topics!.announcement);
+        for (final id in courses.keys) {
+          r.clearRetained(topics!.course(id));
+        }
         for (final p in group.participants) {
           r.clearRetained(topics!.position(p.id));
         }
@@ -614,6 +967,7 @@ class RunSession extends ChangeNotifier {
     settings.activeEvent = null;
     await notifier.cancel(NoteId.offRoute);
     await notifier.cancel(NoteId.wrongWay);
+    await notifier.cancel(NoteId.fuel);
     dispose();
   }
 
@@ -630,8 +984,18 @@ class RunSession extends ChangeNotifier {
     _messageSub?.cancel();
     _reportTimer?.cancel();
     _alertTimer?.cancel();
+    _tick?.cancel();
+    notifier.onAction = null;
     relay?.state.removeListener(_onRelayState);
     relay?.dispose();
     super.dispose();
   }
+}
+
+String _clock(DateTime t) =>
+    '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+String _minutes(Duration d) {
+  final m = d.inMinutes.abs();
+  return m < 60 ? '$m min' : '${m ~/ 60} h ${m % 60} min';
 }

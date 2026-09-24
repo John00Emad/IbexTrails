@@ -250,14 +250,29 @@ class _TrailMapState extends State<TrailMap> {
       layers.add(
         MarkerLayer(
           markers: [
-            for (final w in route.waypoints)
-              Marker(
-                point: ll(w.point),
-                width: 120,
-                height: 44,
-                alignment: const Alignment(0, -0.6),
-                child: _WaypointPin(name: w.name),
-              ),
+            // Checkpoints when the course has them (they come from the
+            // waypoints), otherwise the plain GPX waypoints.
+            if (s.course?.checkpoints.isNotEmpty ?? false)
+              for (final cp in s.course!.checkpoints)
+                Marker(
+                  point: ll(s.course!.pointOf(cp)),
+                  width: 130,
+                  height: 44,
+                  alignment: const Alignment(0, -0.6),
+                  child: _WaypointPin(
+                    name: cp.name,
+                    passed: s.checkpoints?.passed.containsKey(cp.id) ?? false,
+                  ),
+                )
+            else
+              for (final w in route.waypoints)
+                Marker(
+                  point: ll(w.point),
+                  width: 120,
+                  height: 44,
+                  alignment: const Alignment(0, -0.6),
+                  child: _WaypointPin(name: w.name),
+                ),
             Marker(
               point: ll(route.start),
               width: 30,
@@ -400,8 +415,9 @@ class _RoundIcon extends StatelessWidget {
 }
 
 class _WaypointPin extends StatelessWidget {
-  const _WaypointPin({required this.name});
+  const _WaypointPin({required this.name, this.passed = false});
   final String name;
+  final bool passed;
 
   @override
   Widget build(BuildContext context) {
@@ -426,7 +442,11 @@ class _WaypointPin extends StatelessWidget {
             ),
           ),
         ),
-        const Icon(Icons.location_on, size: 20, color: Brand.oasis),
+        Icon(
+          passed ? Icons.check_circle : Icons.location_on,
+          size: 20,
+          color: passed ? TrailColors.ok : Brand.oasis,
+        ),
       ],
     );
   }

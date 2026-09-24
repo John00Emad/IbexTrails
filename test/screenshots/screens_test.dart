@@ -16,7 +16,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:ibex_trails/app.dart';
+import 'package:ibex_trails/core/course.dart';
 import 'package:ibex_trails/core/crypto.dart';
+import 'package:ibex_trails/core/fuel.dart';
 import 'package:ibex_trails/core/geo.dart';
 import 'package:ibex_trails/core/gpx.dart';
 import 'package:ibex_trails/core/protocol.dart';
@@ -25,6 +27,8 @@ import 'package:ibex_trails/services/notifications.dart';
 import 'package:ibex_trails/services/relay_client.dart';
 import 'package:ibex_trails/services/settings.dart';
 import 'package:ibex_trails/state/run_session.dart';
+import 'package:ibex_trails/ui/course_editor_screen.dart';
+import 'package:ibex_trails/ui/course_picker.dart';
 import 'package:ibex_trails/ui/home_screen.dart';
 import 'package:ibex_trails/ui/run_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -170,13 +174,30 @@ void main() {
 
     // Organizer view with a group spread along the route.
     final route = _demoRoute();
+    final main = Course.fromRoute(route, id: 'c1', name: '12 km');
+    final started = DateTime.now().subtract(const Duration(minutes: 25));
+    final withCutoffs = main.copyWith(
+      start: started,
+      checkpoints: [
+        for (final cp in main.checkpoints)
+          cp.copyWith(cutoff: Duration(minutes: cp.along < 4000 ? 60 : 150)),
+      ],
+    );
+    final short = Course.fromRoute(
+      TrailRoute.fromPoints('Stem', [
+        for (var e = 0.0; e <= 3000; e += 50)
+          offset(e * 0.3, e, 300 + e * 0.12),
+      ]),
+      id: 'c2',
+      name: '3 km',
+    );
     final gps = StreamController<Position>();
     final session = (await tester.runAsync(
       () => RunSession.organize(
         settings,
         notifier,
         eventName: 'Sunday long run',
-        route: route,
+        courses: [withCutoffs, short],
         locationSource: () => gps.stream,
       ),
     ))!;
@@ -208,6 +229,7 @@ void main() {
         RunnerStatus status = RunnerStatus.ok,
         double north = 0,
         Role role = Role.runner,
+        Map<String, DateTime> passes = const {},
       }) async {
         final p = shared.pointAt(along);
         final lat = p.lat + north / 111195;
@@ -225,14 +247,23 @@ void main() {
               along: along,
               offBy: north == 0 ? 5 : north.abs(),
               battery: 64,
+              course: 'c1',
+              passes: passes,
+              started: started,
             ).toJson(),
           ),
           retain: true,
         );
       }
 
-      await report('a', 'Rami Adel', 4100);
-      await report('b', 'Mona Samir', 3350);
+      final early = started.add(const Duration(minutes: 20));
+      await report('a', 'Rami Adel', 4100, passes: {'cp1': early});
+      await report(
+        'b',
+        'Mona Samir',
+        3350,
+        passes: {'cp1': early.add(const Duration(minutes: 3))},
+      );
       await report(
         'c',
         'Karim',
@@ -273,6 +304,46 @@ void main() {
     });
     await tester.pump(const Duration(seconds: 1));
     await _shot(tester, key, '5_off_route');
+
+    // Fuel: one gel logged, a reminder showing, then the fuel sheet.
+    await tester.runAsync(() async {
+      final base = shared.pointAt(2440);
+      gps.add(_fix(base));
+      gps.add(_fix(shared.pointAt(2460)));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    final plan = settings.fuelPlan;
+    session.logFuel(plan.item('gel')!);
+    session.fuelReminder = FuelReminder(
+      carbs: 25,
+      fluidMl: 0,
+      suggestion: [(plan.item('gel')!, 1)],
+    );
+    session.notifyListeners();
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '6_run_checkpoint_fuel');
+    await tester.tap(find.byTooltip('Fuel'));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '7_fuel_sheet');
+    await tester.tapAt(const Offset(200, 60));
+    await tester.pump(const Duration(seconds: 1));
+
+    // Course picker and course editor.
+    final ctx = tester.element(find.byType(RunScreen));
+    unawaited(pickCourse(ctx, session.courseList, current: 'c1'));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '8_course_picker');
+    await tester.tapAt(const Offset(200, 60));
+    await tester.pump(const Duration(seconds: 1));
+    unawaited(
+      Navigator.of(ctx).push(
+        MaterialPageRoute<void>(
+          builder: (_) => CourseEditorScreen(course: session.course!),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '9_course_editor');
 
     await tester.pumpWidget(const SizedBox());
     debugDisableShadows = true;

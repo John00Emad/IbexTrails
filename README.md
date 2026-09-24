@@ -12,6 +12,10 @@ built with Flutter.
 |---|---|---|---|
 | ![Home](docs/screenshots/1_home.png) | ![Organizer map](docs/screenshots/2_run_organizer.png) | ![Group](docs/screenshots/3_group.png) | ![Off route](docs/screenshots/5_off_route.png) |
 
+| Checkpoint & fuel reminder | Fuel log | Choose your distance |
+|---|---|---|
+| ![Checkpoint line and fuel reminder](docs/screenshots/6_run_checkpoint_fuel.png) | ![Fuel sheet](docs/screenshots/7_fuel_sheet.png) | ![Course picker](docs/screenshots/8_course_picker.png) |
+
 *(Screens rendered in the test harness, where map tiles are not downloaded, so
 the map background is blank. On a phone you see OpenTopoMap/OpenStreetMap.)*
 
@@ -30,6 +34,19 @@ the map background is blank. On a phone you see OpenTopoMap/OpenStreetMap.)*
   ("Water in 2.3 km"), and an elevation profile with your position on it.
 - **Works without mobile data.** The route and navigation run entirely on the
   phone. Use **Save map for offline** before you leave coverage.
+- **Checkpoints and cut-offs.** Shows the next checkpoint, your projected
+  arrival and how much time you have before its cut-off ("+23 min"). It warns
+  you when your pace puts you behind a cut-off. Arrival times use
+  **km-effort** (the ITRA measure where 100 m of climbing counts as 1 km on
+  the flat), so they stay realistic on hilly courses.
+- **Fuelling reminders.** Set a carb target (e.g. 60 g per hour) and a fluid
+  target, and list what you carry: gels, chews, dates, drinks, with the carbs
+  from their labels. The phone buzzes when it's time, saying how much and
+  what to eat ("25 g carbs: 1 × Energy gel"). **Ate it** / **In 5 min**
+  buttons work from the lock screen. Falling behind? The next reminder asks
+  for a bit more, capped so you don't overload your gut. If an aid station is
+  only a few minutes away, the reminder waits until you get there. Your fuel
+  log stays **private on your phone**.
 - **SOS screen.** Mark yourself as needing help to the whole group, call or
   **text your coordinates by SMS** to the organizer (SMS often gets through
   when data doesn't), or share your location through any app.
@@ -38,12 +55,20 @@ the map background is blank. On a phone you see OpenTopoMap/OpenStreetMap.)*
 - Create an event, and you get a code like `K7MPQ-W3XZA`. Share it in the
   group chat.
 - The route is **sent to everyone's phone automatically** when they join.
+- **Multi-distance races.** Add one GPX per distance (e.g. 10 / 25 / 50 km).
+  Runners choose theirs when joining, and the group list can be filtered by
+  distance.
+- **Checkpoints with cut-offs**, taken from the GPX waypoints or added by
+  hand. Each distance can have its own start (wave) time. The **Checkpoints**
+  tab shows who has passed each checkpoint and when, who is still out, and
+  who missed a cut-off.
 - A live map of everyone, plus a list sorted by distance along the route
   (front runner, last runner, gap). The elevation profile shows where everyone
   is on the climb.
 - **Alerts** when someone goes **off route**, heads the **wrong way**, presses
-  **SOS**, has had **no signal** for 5 min, **hasn't moved** for 10 min, or has
-  a **low battery**. Tap an alert to see that runner's breadcrumb trail on the
+  **SOS**, has had **no signal** for 5 min, **hasn't moved** for 10 min,
+  **missed a cut-off** or is **behind cut-off pace**, or has a **low
+  battery**. Tap an alert to see that runner's breadcrumb trail on the
   map, which shows exactly where they took the wrong turn.
 - **Message the group** ("Regroup at the water point").
 - **End event** removes everything from the relay afterwards.
@@ -102,11 +127,13 @@ flutter build apk --release # Android APK
 
 ## Using it on a group run
 
-1. **Organizer:** *Organize a group run* → name it → choose the GPX → *Create
-   event*. Share the code. Optionally add your phone number so runners can
+1. **Organizer:** *Organize a group run* → name it → add a GPX for each
+   distance. Tap a distance to set its start time, checkpoints and cut-offs →
+   *Create event*. Share the code. Optionally add your phone number so runners can
    call or text you from the SOS screen.
 2. **Everyone else:** *Join a group run* → paste the code → enter your name →
-   *Runner* or *Sweeper*. The route appears automatically.
+   *Runner* or *Sweeper*. Pick your distance; the route appears
+   automatically. Set your **Fuel plan** (home screen) before the start.
 3. **Before leaving coverage:** menu → *Save map for offline*.
 4. **Android phones:** when asked, allow location *while using the app* and
    allow notifications. On Xiaomi, Huawei, Samsung and similar phones, also set

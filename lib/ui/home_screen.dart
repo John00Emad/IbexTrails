@@ -6,6 +6,7 @@ import '../core/event_code.dart';
 import '../core/route.dart';
 import '../services/settings.dart';
 import '../state/run_session.dart';
+import 'fuel_plan_screen.dart';
 import 'join_screen.dart';
 import 'organize_screen.dart';
 import 'route_picker.dart';
@@ -176,6 +177,29 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 8),
                     const _WadiChecklist(),
+                    const SizedBox(height: 8),
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.bolt, color: Brand.oasis),
+                        title: const Text(
+                          'Fuel plan',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        subtitle: Text(
+                          app.settings.fuelPlan.enabled
+                              ? '${app.settings.fuelPlan.carbsPerHour.round()} g '
+                                    'carbs per hour · reminders every '
+                                    '${app.settings.fuelPlan.intervalMin} min'
+                              : 'Reminders off',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const FuelPlanScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 20),
                     Text(
                       'Free: no accounts, no subscriptions. Group locations '

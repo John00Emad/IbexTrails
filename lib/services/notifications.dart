@@ -1,11 +1,47 @@
+import 'dart:convert';
+import 'dart:ui';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../core/fuel.dart';
+import 'settings.dart';
+
+/// Notification action ids.
+abstract final class NoteAction {
+  static const fuelAte = 'fuel_ate';
+  static const fuelSnooze = 'fuel_snooze';
+  static const fuelCategory = 'fuel';
+}
+
+/// Runs in a background isolate when a notification button is tapped
+/// without opening the app (e.g. "Ate it" on the lock screen). Stores the
+/// action; the running session picks it up within seconds.
+@pragma('vm:entry-point')
+Future<void> onBackgroundNotificationAction(NotificationResponse r) async {
+  DartPluginRegistrant.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
+  final list = prefs.getStringList(pendingActionsKey) ?? <String>[];
+  list.add(
+    jsonEncode({
+      'a': r.actionId,
+      'p': r.payload,
+      't': DateTime.now().millisecondsSinceEpoch,
+    }),
+  );
+  await prefs.setStringList(pendingActionsKey, list);
+}
 
 /// Local notifications for alerts that must get through while the phone is
 /// in a pocket: off route, wrong way, SOS from a group member, etc.
 class Notifier {
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _ready = false;
+
+  /// Receives notification actions tapped while the app is in the
+  /// foreground. Set by the active run.
+  void Function(String? actionId, String? payload)? onAction;
 
   static const _alertChannel = AndroidNotificationDetails(
     'alerts',
@@ -30,14 +66,30 @@ class Notifier {
     if (kIsWeb) return;
     try {
       await _plugin.initialize(
-        settings: const InitializationSettings(
-          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        settings: InitializationSettings(
+          android: const AndroidInitializationSettings('@mipmap/ic_launcher'),
           iOS: DarwinInitializationSettings(
             requestAlertPermission: false,
             requestBadgePermission: false,
             requestSoundPermission: false,
+            notificationCategories: [
+              DarwinNotificationCategory(
+                NoteAction.fuelCategory,
+                actions: [
+                  DarwinNotificationAction.plain(NoteAction.fuelAte, 'Ate it'),
+                  DarwinNotificationAction.plain(
+                    NoteAction.fuelSnooze,
+                    'In 5 min',
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
+        onDidReceiveNotificationResponse: (r) =>
+            onAction?.call(r.actionId, r.payload),
+        onDidReceiveBackgroundNotificationResponse:
+            onBackgroundNotificationAction,
       );
       _ready = true;
     } on Object catch (e) {
@@ -101,6 +153,45 @@ class Notifier {
     );
   }
 
+  /// Fuel reminder with "Ate it" / "In 5 min" buttons. The payload carries
+  /// the suggested servings so "Ate it" logs exactly those.
+  Future<void> fuel(FuelReminder r) async {
+    if (!_ready) return;
+    final payload = jsonEncode({
+      's': [
+        for (final (item, n) in r.suggestion) [item.id, n],
+      ],
+    });
+    await _plugin.show(
+      id: NoteId.fuel,
+      title: r.title,
+      body: r.body,
+      payload: payload,
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          'fuel',
+          'Fuel & hydration reminders',
+          channelDescription: 'When to eat and drink, from your fuel plan',
+          importance: Importance.high,
+          priority: Priority.high,
+          category: AndroidNotificationCategory.reminder,
+          vibrationPattern: Int64List.fromList([0, 300, 150, 300]),
+          actions: [
+            if (r.suggestion.isNotEmpty)
+              const AndroidNotificationAction(NoteAction.fuelAte, 'Ate it'),
+            const AndroidNotificationAction(NoteAction.fuelSnooze, 'In 5 min'),
+          ],
+        ),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentSound: true,
+          categoryIdentifier: NoteAction.fuelCategory,
+          interruptionLevel: InterruptionLevel.timeSensitive,
+        ),
+      ),
+    );
+  }
+
   Future<void> cancel(int id) async {
     if (_ready) await _plugin.cancel(id: id);
   }
@@ -113,6 +204,9 @@ abstract final class NoteId {
   static const announcement = 3;
   static const connection = 4;
   static const jump = 5;
+  static const fuel = 6;
+  static const checkpoint = 7;
+  static const cutoff = 8;
 
   /// Group alerts get ids derived from participant + kind.
   static int group(String key) => 1000 + (key.hashCode & 0x3fffffff) % 100000;

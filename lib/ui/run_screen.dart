@@ -9,6 +9,8 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app.dart';
 import '../brand.dart';
+import '../core/checkpoints.dart';
+import '../core/course.dart';
 import '../core/geo.dart';
 import '../core/group.dart';
 import '../services/location_service.dart';
@@ -16,7 +18,10 @@ import '../services/map_tiles.dart';
 import '../services/relay_client.dart';
 import '../services/settings.dart';
 import '../state/run_session.dart';
+import 'course_editor_screen.dart';
+import 'course_picker.dart';
 import 'elevation_profile.dart';
+import 'fuel_sheet.dart';
 import 'group_sheet.dart';
 import 'route_picker.dart';
 import 'settings_screen.dart';
@@ -40,6 +45,8 @@ class RunScreen extends StatefulWidget {
 
 enum _MenuAction {
   announce,
+  course,
+  editCourse,
   route,
   download,
   style,
@@ -57,6 +64,7 @@ class _RunScreenState extends State<RunScreen> {
   late final Timer _clock;
   StreamSubscription<PrefetchProgress>? _prefetch;
   PrefetchProgress? _prefetchProgress;
+  bool _askingCourse = false;
 
   RunSession get s => widget.session;
   AppSettings get settings => s.settings;
@@ -71,12 +79,53 @@ class _RunScreenState extends State<RunScreen> {
     if (widget.showCodeOnStart) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _showCode());
     }
+    s.addListener(_maybeAskCourse);
+    _maybeAskCourse();
+  }
+
+  /// Asks once for the distance when the event has several.
+  void _maybeAskCourse() {
+    if (!s.needsCourseChoice || _askingCourse || !mounted) return;
+    _askingCourse = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _chooseCourse());
+  }
+
+  Future<void> _chooseCourse() async {
+    final id = await pickCourse(context, s.courseList, current: s.course?.id);
+    if (id != null) {
+      s.selectCourse(id);
+      _fitRoute();
+    }
+    // If dismissed without choosing, ask again only from the menu.
+  }
+
+  Future<void> _editCourse() async {
+    final c = s.course;
+    if (c == null) return;
+    final edited = await Navigator.of(context).push<Course>(
+      MaterialPageRoute(builder: (_) => CourseEditorScreen(course: c)),
+    );
+    if (edited != null) s.updateCourse(edited);
+  }
+
+  void _fitRoute() {
+    final r = s.route;
+    if (r == null) return;
+    final (sw, ne) = r.bounds;
+    _map.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds(ll(sw), ll(ne)),
+        padding: const EdgeInsets.fromLTRB(40, 140, 40, 260),
+      ),
+    );
+    setState(() => _follow = false);
   }
 
   @override
   void dispose() {
     _clock.cancel();
     _prefetch?.cancel();
+    s.removeListener(_maybeAskCourse);
     WakelockPlus.disable();
     super.dispose();
   }
@@ -186,14 +235,7 @@ class _RunScreenState extends State<RunScreen> {
     final r = await pickRoute(context);
     if (r == null) return;
     s.useRoute(r);
-    final (sw, ne) = r.bounds;
-    _map.fitCamera(
-      CameraFit.bounds(
-        bounds: LatLngBounds(ll(sw), ll(ne)),
-        padding: const EdgeInsets.fromLTRB(40, 140, 40, 260),
-      ),
-    );
-    setState(() => _follow = false);
+    _fitRoute();
   }
 
   void _downloadMap() {
@@ -305,6 +347,10 @@ class _RunScreenState extends State<RunScreen> {
     switch (a) {
       case _MenuAction.announce:
         _announce();
+      case _MenuAction.course:
+        _chooseCourse();
+      case _MenuAction.editCourse:
+        _editCourse();
       case _MenuAction.route:
         _changeRoute();
       case _MenuAction.download:
@@ -367,6 +413,9 @@ class _RunScreenState extends State<RunScreen> {
                   onFollow: () => setState(() => _follow = true),
                   onSos: () => showSosSheet(context, s),
                   sosActive: s.sos,
+                  onFuel: s.fuel == null
+                      ? null
+                      : () => showFuelSheet(context, s),
                 ),
               ),
             ],
@@ -421,16 +470,32 @@ class _RunScreenState extends State<RunScreen> {
                   title: Text('Message the group'),
                 ),
               ),
+            if (s.courseList.length > 1)
+              const PopupMenuItem(
+                value: _MenuAction.course,
+                child: ListTile(
+                  leading: Icon(Icons.alt_route),
+                  title: Text('Choose distance'),
+                ),
+              ),
+            if (s.isOrganizer && s.course != null)
+              const PopupMenuItem(
+                value: _MenuAction.editCourse,
+                child: ListTile(
+                  leading: Icon(Icons.edit_location_alt_outlined),
+                  title: Text('Checkpoints & cut-offs'),
+                ),
+              ),
             if (!s.isEvent || s.isOrganizer || s.route == null)
               PopupMenuItem(
                 value: _MenuAction.route,
                 child: ListTile(
                   leading: const Icon(Icons.route),
                   title: Text(
-                    s.route == null
+                    s.isOrganizer
+                        ? 'Add a distance (GPX)'
+                        : s.route == null
                         ? 'Load a GPX route'
-                        : s.isOrganizer
-                        ? 'Change & share route'
                         : 'Change route',
                   ),
                 ),
@@ -599,6 +664,36 @@ class _RunScreenState extends State<RunScreen> {
       );
     }
 
+    final fr = s.fuelReminder;
+    if (fr != null) {
+      out.add(
+        _Banner(
+          color: Brand.oasis,
+          icon: Icons.bolt,
+          text: '${fr.title}: ${fr.body}',
+          onTap: () => showFuelSheet(context, s),
+          actions: [
+            if (fr.suggestion.isNotEmpty)
+              TextButton(
+                onPressed: () {
+                  for (final (item, n) in fr.suggestion) {
+                    s.logFuel(item, servings: n);
+                  }
+                },
+                child: const Text(
+                  'ATE IT',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            TextButton(
+              onPressed: s.snoozeFuel,
+              child: const Text('5 MIN', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+    }
+
     final a = s.announcement;
     if (a != null && a.id != _dismissedAnnouncement) {
       out.add(
@@ -752,12 +847,14 @@ class _MapButtons extends StatelessWidget {
     required this.onFollow,
     required this.onSos,
     required this.sosActive,
+    required this.onFuel,
   });
 
   final bool follow;
   final VoidCallback onFollow;
   final VoidCallback onSos;
   final bool sosActive;
+  final VoidCallback? onFuel;
 
   @override
   Widget build(BuildContext context) {
@@ -770,6 +867,16 @@ class _MapButtons extends StatelessWidget {
           onPressed: onFollow,
           child: Icon(follow ? Icons.my_location : Icons.location_searching),
         ),
+        if (onFuel != null) ...[
+          const SizedBox(height: 12),
+          FloatingActionButton.small(
+            heroTag: 'fuel',
+            tooltip: 'Fuel',
+            backgroundColor: Brand.oasis,
+            onPressed: onFuel,
+            child: const Icon(Icons.bolt),
+          ),
+        ],
         const SizedBox(height: 12),
         FloatingActionButton(
           heroTag: 'sos',
@@ -834,7 +941,8 @@ class _StatsPanel extends StatelessWidget {
       ]);
     }
 
-    final next = (route != null && m != null)
+    final outlook = s.outlook;
+    final next = (route != null && m != null && outlook == null)
         ? route.nextWaypoint(m.along)
         : null;
     final others = <ProfileMarker>[
@@ -858,6 +966,7 @@ class _StatsPanel extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Row(children: [for (final t in tiles) Expanded(child: t)]),
+              if (outlook != null) _CheckpointLine(outlook: outlook),
               if (next != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
@@ -887,6 +996,7 @@ class _StatsPanel extends StatelessWidget {
                     route: route,
                     along: m?.along,
                     others: others,
+                    ticks: s.course?.checkpoints.map((c) => c.along).toList(),
                   ),
                 ),
             ],
@@ -939,4 +1049,89 @@ class _Stat extends StatelessWidget {
       ],
     );
   }
+}
+
+/// "CP2 Wadi Hof · 3.2 km · ETA 10:40 · cut-off 11:30" with a margin chip.
+class _CheckpointLine extends StatelessWidget {
+  const _CheckpointLine({required this.outlook});
+  final CheckpointOutlook outlook;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final o = outlook;
+    final margin = o.margin;
+    final missed = o.isMissed(DateTime.now());
+    final (color, chip) = switch (margin) {
+      null => (Brand.oasis, null),
+      _ when missed => (TrailColors.danger, 'closed'),
+      final d when d.isNegative => (
+        TrailColors.danger,
+        '${d.inMinutes.abs()} min late',
+      ),
+      final d when d.inMinutes < 15 => (
+        TrailColors.warning,
+        '+${d.inMinutes} min',
+      ),
+      final d => (TrailColors.ok, '+${_hm(d)}'),
+    };
+    final facts = [
+      formatDistance(o.distance),
+      'ETA ${clock(o.eta)}',
+      if (o.cutoff != null && margin != null && margin.isNegative)
+        'cut-off ${clock(o.cutoff!)}',
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          Icon(_cpIcon(o.checkpoint.kind), size: 18, color: Brand.oasis),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: o.checkpoint.name,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  TextSpan(text: ' · ${facts.join(' · ')}'),
+                ],
+              ),
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+          if (chip != null)
+            Container(
+              margin: const EdgeInsets.only(left: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                chip,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static String _hm(Duration d) => d.inMinutes < 60
+      ? '${d.inMinutes} min'
+      : '${d.inHours}h${d.inMinutes.remainder(60).toString().padLeft(2, '0')}';
+
+  static IconData _cpIcon(CheckpointKind k) => switch (k) {
+    CheckpointKind.checkpoint => Icons.flag,
+    CheckpointKind.water => Icons.water_drop,
+    CheckpointKind.aid => Icons.restaurant,
+    CheckpointKind.medical => Icons.medical_services,
+  };
 }

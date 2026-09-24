@@ -1,3 +1,4 @@
+import 'course.dart';
 import 'geo.dart';
 import 'route.dart';
 
@@ -13,11 +14,18 @@ class EventTopics {
   String get announcement => '$base/msg';
   String position(String participantId) => '$base/pos/$participantId';
 
+  /// Each course (distance) is retained on its own topic so messages stay
+  /// small enough for public brokers.
+  String course(String courseId) => '$base/course/$courseId';
+
   /// Returns the participant id if [topic] is a position topic of this event.
-  String? participantOf(String topic) {
-    final prefix = '$base/pos/';
-    return topic.startsWith(prefix) ? topic.substring(prefix.length) : null;
-  }
+  String? participantOf(String topic) => _suffix(topic, '$base/pos/');
+
+  /// Returns the course id if [topic] is a course topic of this event.
+  String? courseOf(String topic) => _suffix(topic, '$base/course/');
+
+  static String? _suffix(String topic, String prefix) =>
+      topic.startsWith(prefix) ? topic.substring(prefix.length) : null;
 }
 
 enum Role {
@@ -73,6 +81,11 @@ class PositionReport {
     this.offBy,
     this.battery,
     this.trail = const [],
+    this.course,
+    this.passes = const {},
+    this.next,
+    this.eta,
+    this.started,
   });
 
   final String id;
@@ -101,6 +114,19 @@ class PositionReport {
   /// organizer can see the path taken even across a connectivity gap.
   final List<TrailPoint> trail;
 
+  /// Id of the course (distance) this runner is on.
+  final String? course;
+
+  /// Checkpoint id -> time passed.
+  final Map<String, DateTime> passes;
+
+  /// Next checkpoint and projected arrival there.
+  final String? next;
+  final DateTime? eta;
+
+  /// When this runner started, for cut-offs on runs without a set start.
+  final DateTime? started;
+
   GeoPoint get point => GeoPoint(lat, lon, elevation);
 
   Map<String, Object?> toJson() => {
@@ -127,6 +153,15 @@ class PositionReport {
             (time.difference(p.time).inMilliseconds / 1000).round(),
           ],
       ],
+    if (course != null) 'c': course,
+    if (passes.isNotEmpty)
+      'cp': [
+        for (final e in passes.entries)
+          [e.key, e.value.millisecondsSinceEpoch ~/ 1000],
+      ],
+    if (next != null) 'nx': next,
+    if (eta != null) 'eta': eta!.millisecondsSinceEpoch ~/ 1000,
+    if (started != null) 'st': started!.millisecondsSinceEpoch ~/ 1000,
   };
 
   static PositionReport? fromJson(Object? json) {
@@ -157,6 +192,14 @@ class PositionReport {
               time.subtract(Duration(seconds: (p[2] as num).toInt())),
             ),
         ],
+        course: json['c'] as String?,
+        passes: {
+          for (final p in (json['cp'] as List? ?? const []).cast<List>())
+            p[0] as String: _fromSeconds(p[1])!,
+        },
+        next: json['nx'] as String?,
+        eta: _fromSeconds(json['eta']),
+        started: _fromSeconds(json['st']),
       );
     } on Object {
       return null;
@@ -164,7 +207,8 @@ class PositionReport {
   }
 }
 
-/// Event details published (retained) by the organizer.
+/// Event details published (retained) by the organizer. The courses
+/// themselves are published separately (see [CourseUpdate]).
 class EventInfo {
   const EventInfo({
     required this.name,
@@ -172,7 +216,8 @@ class EventInfo {
     required this.organizerName,
     required this.updated,
     this.organizerPhone,
-    this.route,
+    this.courses = const [],
+    this.legacyRoute,
   });
 
   final String name;
@@ -182,7 +227,12 @@ class EventInfo {
   /// Optional phone number shown to runners for SOS calls/SMS.
   final String? organizerPhone;
   final DateTime updated;
-  final TrailRoute? route;
+
+  /// The distances on offer, e.g. 5 / 10 / 25 / 50 km.
+  final List<CourseInfo> courses;
+
+  /// Route embedded by early versions, which had a single course.
+  final TrailRoute? legacyRoute;
 
   Map<String, Object?> toJson() => {
     't': 'event',
@@ -192,7 +242,7 @@ class EventInfo {
     if (organizerPhone != null && organizerPhone!.isNotEmpty)
       'op': organizerPhone,
     'u': updated.millisecondsSinceEpoch,
-    if (route != null) 'rt': route!.toShareJson(),
+    'cs': [for (final c in courses) c.toJson()],
   };
 
   static EventInfo? fromJson(Object? json) {
@@ -206,11 +256,40 @@ class EventInfo {
         updated: DateTime.fromMillisecondsSinceEpoch(
           (json['u'] as num).toInt(),
         ),
-        route: json['rt'] is Map
+        courses: [
+          for (final c in (json['cs'] as List? ?? const []).cast<Map>())
+            CourseInfo.fromJson(c),
+        ],
+        legacyRoute: json['rt'] is Map
             ? TrailRoute.fromShareJson(
                 (json['rt'] as Map).cast<String, Object?>(),
               )
             : null,
+      );
+    } on Object {
+      return null;
+    }
+  }
+}
+
+/// A course with its route and checkpoints, retained on its own topic.
+class CourseUpdate {
+  const CourseUpdate(this.course, this.updated);
+  final Course course;
+  final DateTime updated;
+
+  Map<String, Object?> toJson() => {
+    't': 'course',
+    'u': updated.millisecondsSinceEpoch,
+    ...course.toShareJson(),
+  };
+
+  static CourseUpdate? fromJson(Object? json) {
+    if (json is! Map || json['t'] != 'course') return null;
+    try {
+      return CourseUpdate(
+        Course.fromShareJson(json),
+        DateTime.fromMillisecondsSinceEpoch((json['u'] as num).toInt()),
       );
     } on Object {
       return null;
@@ -256,4 +335,7 @@ class Announcement {
 }
 
 double _r6(double v) => (v * 1e6).round() / 1e6;
+DateTime? _fromSeconds(Object? v) => v == null
+    ? null
+    : DateTime.fromMillisecondsSinceEpoch((v as num).toInt() * 1000);
 double _r1(double v) => (v * 10).round() / 10;

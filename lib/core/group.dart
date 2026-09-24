@@ -1,3 +1,4 @@
+import 'course.dart';
 import 'geo.dart';
 import 'protocol.dart';
 
@@ -69,12 +70,15 @@ class Participant {
       latest.status != RunnerStatus.finished;
 }
 
+/// Ordered by urgency.
 enum AlertKind {
   sos('SOS'),
   offRoute('Off route'),
   wrongWay('Wrong way'),
+  cutoffMissed('Missed cut-off'),
   noSignal('No signal'),
   stopped('Not moving'),
+  cutoffRisk('Behind cut-off pace'),
   lowBattery('Low battery');
 
   const AlertKind(this.label);
@@ -82,12 +86,34 @@ enum AlertKind {
 }
 
 class GroupAlert {
-  const GroupAlert(this.participant, this.kind, this.detail);
+  const GroupAlert(this.participant, this.kind, this.detail, {this.tag = ''});
   final Participant participant;
   final AlertKind kind;
   final String detail;
 
-  String get key => '${participant.id}/${kind.name}';
+  /// Distinguishes alerts of the same kind, e.g. which checkpoint.
+  final String tag;
+
+  String get key => '${participant.id}/${kind.name}/$tag';
+}
+
+/// Who has passed one checkpoint, who is still out there, who missed it.
+class CheckpointRow {
+  const CheckpointRow({
+    required this.checkpoint,
+    required this.cutoff,
+    required this.passed,
+    required this.pending,
+    required this.missed,
+  });
+
+  final Checkpoint checkpoint;
+
+  /// Clock-time cut-off when the course has a set start.
+  final DateTime? cutoff;
+  final List<(Participant, DateTime)> passed;
+  final List<Participant> pending;
+  final List<Participant> missed;
 }
 
 /// Alerting thresholds for the organizer.
@@ -125,10 +151,13 @@ class Group {
   void remove(String id) => _byId.remove(id);
   void clear() => _byId.clear();
 
-  /// Active participants, furthest along the route first. Those without
-  /// route progress come last, most recently heard first.
-  List<Participant> byProgress() {
-    final list = _byId.values.toList();
+  /// Participants (optionally only those on [course]), furthest along the
+  /// route first. Those without route progress come last, most recently
+  /// heard first.
+  List<Participant> byProgress({String? course}) {
+    final list = _byId.values
+        .where((p) => course == null || p.latest.course == course)
+        .toList();
     list.sort((a, b) {
       final pa = a.latest.along, pb = b.latest.along;
       if (pa != null && pb != null) return pb.compareTo(pa);
@@ -140,8 +169,8 @@ class Group {
   }
 
   /// Leader and last runner along the route among active participants.
-  (Participant, Participant)? spread() {
-    final active = byProgress()
+  (Participant, Participant)? spread({String? course}) {
+    final active = byProgress(course: course)
         .where((p) => p.isActive() && p.latest.along != null)
         .toList();
     if (active.isEmpty) return null;
@@ -149,10 +178,19 @@ class Group {
   }
 
   /// All conditions that currently need the organizer's attention.
-  List<GroupAlert> alerts(DateTime now, AlertPolicy policy) {
+  /// [courseOf] resolves a runner's course, for checkpoint cut-offs.
+  List<GroupAlert> alerts(
+    DateTime now,
+    AlertPolicy policy, {
+    Course? Function(String? id)? courseOf,
+  }) {
     final out = <GroupAlert>[];
     for (final p in _byId.values) {
       final r = p.latest;
+      final course = courseOf?.call(r.course);
+      if (course != null && r.status != RunnerStatus.left) {
+        out.addAll(_cutoffAlerts(p, course, now));
+      }
       if (r.status == RunnerStatus.left) continue;
       if (r.status == RunnerStatus.sos) {
         out.add(GroupAlert(p, AlertKind.sos, 'needs help'));
@@ -201,7 +239,76 @@ class Group {
     out.sort((a, b) => a.kind.index.compareTo(b.kind.index));
     return out;
   }
+
+  List<GroupAlert> _cutoffAlerts(Participant p, Course course, DateTime now) {
+    final r = p.latest;
+    if (r.status == RunnerStatus.finished) return const [];
+    final out = <GroupAlert>[];
+    for (final cp in course.checkpoints) {
+      final cutoff = course.cutoffTime(cp, runnerStart: r.started);
+      if (cutoff == null || r.passes.containsKey(cp.id)) continue;
+      if (now.isAfter(cutoff)) {
+        out.add(
+          GroupAlert(
+            p,
+            AlertKind.cutoffMissed,
+            '${cp.name} closed at ${_clock(cutoff)}',
+            tag: cp.id,
+          ),
+        );
+      } else if (cp.id == r.next && r.eta != null && r.eta!.isAfter(cutoff)) {
+        out.add(
+          GroupAlert(
+            p,
+            AlertKind.cutoffRisk,
+            '${cp.name}: ETA ${_clock(r.eta!)}, cut-off ${_clock(cutoff)}',
+            tag: cp.id,
+          ),
+        );
+      }
+    }
+    return out;
+  }
+
+  /// Per-checkpoint status for everyone on [course].
+  List<CheckpointRow> checkpointBoard(Course course, DateTime now) {
+    final runners = participants
+        .where((p) => p.latest.course == course.id)
+        .toList();
+    return [
+      for (final cp in course.checkpoints)
+        () {
+          final passed = <(Participant, DateTime)>[];
+          final pending = <Participant>[];
+          final missed = <Participant>[];
+          for (final p in runners) {
+            final at = p.latest.passes[cp.id];
+            if (at != null) {
+              passed.add((p, at));
+              continue;
+            }
+            final cutoff = course.cutoffTime(cp, runnerStart: p.latest.started);
+            if (cutoff != null && now.isAfter(cutoff)) {
+              missed.add(p);
+            } else if (p.latest.status != RunnerStatus.left) {
+              pending.add(p);
+            }
+          }
+          passed.sort((a, b) => a.$2.compareTo(b.$2));
+          return CheckpointRow(
+            checkpoint: cp,
+            cutoff: course.cutoffTime(cp),
+            passed: passed,
+            pending: pending,
+            missed: missed,
+          );
+        }(),
+    ];
+  }
 }
+
+String _clock(DateTime t) =>
+    '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
 /// Remembers which alerts were already raised so each one notifies once
 /// until it clears.

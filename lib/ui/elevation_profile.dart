@@ -21,12 +21,17 @@ class ElevationProfile extends StatelessWidget {
     required this.route,
     this.along,
     this.others = const [],
+    this.ticks,
     this.height = 64,
   });
 
   final TrailRoute route;
   final double? along;
   final List<ProfileMarker> others;
+
+  /// Distances to mark under the chart (checkpoints). Defaults to the
+  /// route's waypoints.
+  final List<double>? ticks;
   final double height;
 
   @override
@@ -40,6 +45,7 @@ class ElevationProfile extends StatelessWidget {
           route: route,
           along: along,
           others: others,
+          ticks: ticks ?? [for (final w in route.waypoints) ...w.passes],
           fill: TrailColors.route.withValues(alpha: 0.25),
           line: TrailColors.route,
           done: scheme.onSurface.withValues(alpha: 0.35),
@@ -58,6 +64,7 @@ class _ProfilePainter extends CustomPainter {
     required this.route,
     required this.along,
     required this.others,
+    required this.ticks,
     required this.fill,
     required this.line,
     required this.done,
@@ -69,6 +76,10 @@ class _ProfilePainter extends CustomPainter {
   final TrailRoute route;
   final double? along;
   final List<ProfileMarker> others;
+
+  /// Distances to mark under the chart (checkpoints). Defaults to the
+  /// route's waypoints.
+  final List<double>? ticks;
   final Color fill, line, done, me, waypoint;
   final TextStyle label;
 
@@ -200,15 +211,13 @@ class _ProfilePainter extends CustomPainter {
     final paint = Paint()
       ..color = waypoint
       ..strokeWidth = 2;
-    for (final w in route.waypoints) {
-      for (final pass in w.passes) {
-        final x = xOf(pass);
-        canvas.drawLine(
-          Offset(x, chart.bottom),
-          Offset(x, chart.bottom + 6),
-          paint,
-        );
-      }
+    for (final along in ticks ?? const <double>[]) {
+      final x = xOf(along);
+      canvas.drawLine(
+        Offset(x, chart.bottom),
+        Offset(x, chart.bottom + 6),
+        paint,
+      );
     }
   }
 

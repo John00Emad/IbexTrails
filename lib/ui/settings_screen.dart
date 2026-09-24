@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app.dart';
 import '../services/settings.dart';
+import 'fuel_plan_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -103,6 +104,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 title: Text(m.label),
                 onTap: () => s.mapStyle = m,
               ),
+            _Section('Fuelling'),
+            ListTile(
+              leading: const Icon(Icons.bolt),
+              title: const Text('Fuel plan'),
+              subtitle: Text(
+                s.fuelPlan.enabled
+                    ? '${s.fuelPlan.carbsPerHour.round()} g carbs/h · '
+                          'reminders every ${s.fuelPlan.intervalMin} min'
+                    : 'Reminders off',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const FuelPlanScreen()),
+              ),
+            ),
             _Section('Group tracking'),
             ListTile(
               title: const Text('Send my position every'),

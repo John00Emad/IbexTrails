@@ -10,9 +10,11 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:ibex_trails/core/course.dart';
 import 'package:ibex_trails/core/crypto.dart';
 import 'package:ibex_trails/core/event_code.dart';
 import 'package:ibex_trails/core/geo.dart';
+import 'package:ibex_trails/core/group.dart';
 import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/core/route.dart';
 import 'package:ibex_trails/services/notifications.dart';
@@ -62,6 +64,7 @@ class SimulatedDevice {
   final EventTopics topics;
   final RelayClient relay;
   EventInfo? event;
+  final courses = <String, Course>{};
   bool eventCleared = false;
   Announcement? announcement;
   final reports = <String, PositionReport>{};
@@ -74,6 +77,9 @@ class SimulatedDevice {
         } else {
           event = EventInfo.fromJson(await cipher.open(m.payload));
         }
+      } else if (topics.courseOf(m.topic) != null && m.payload.isNotEmpty) {
+        final u = CourseUpdate.fromJson(await cipher.open(m.payload));
+        if (u != null) courses[u.course.id] = u.course;
       } else if (m.topic == topics.announcement && m.payload.isNotEmpty) {
         announcement = Announcement.fromJson(await cipher.open(m.payload));
       } else if (topics.participantOf(m.topic) != null &&
@@ -131,11 +137,24 @@ void main() {
     () async {
       settings.displayName = 'Olga';
       final gps = StreamController<Position>();
+      // Started 2 h ago; checkpoint at 3 km closed after 1 h.
+      final course = Course.fromRoute(route, id: 'c1', name: '4 km').copyWith(
+        start: DateTime.now().subtract(const Duration(hours: 2)),
+        checkpoints: const [
+          Checkpoint(
+            id: 'cp1',
+            name: 'Bridge',
+            kind: CheckpointKind.aid,
+            along: 3000,
+            cutoff: Duration(hours: 1),
+          ),
+        ],
+      );
       final org = await RunSession.organize(
         settings,
         Notifier(),
         eventName: 'Sunday long run',
-        route: route,
+        courses: [course],
         locationSource: () => gps.stream,
       );
       addTearDown(org.dispose);
@@ -147,11 +166,14 @@ void main() {
       addTearDown(runner.relay.dispose);
       await runner.start();
 
-      // The route arrives with the (retained) event info, identical geometry.
+      // Event info and the course arrive (retained), identical geometry.
       await waitFor(() => runner.event != null, what: 'event info');
       expect(runner.event!.name, 'Sunday long run');
       expect(runner.event!.organizerName, 'Olga');
-      expect(runner.event!.route!.points, org.route!.points);
+      expect(runner.event!.courses.single.name, '4 km');
+      await waitFor(() => runner.courses.containsKey('c1'), what: 'course');
+      expect(runner.courses['c1']!.route.points, org.route!.points);
+      expect(runner.courses['c1']!.checkpoints.single.name, 'Bridge');
 
       // Two runners report in; one presses SOS.
       final now = DateTime.now();
@@ -168,6 +190,7 @@ void main() {
           status: RunnerStatus.ok,
           along: 2500,
           battery: 80,
+          course: 'c1',
         ).toJson(),
       );
       final p2 = offset(120, 900);
@@ -193,6 +216,16 @@ void main() {
       ]);
       await waitFor(() => org.alerts.isNotEmpty, what: 'SOS alert');
       expect(org.alerts.first.participant.name, 'Sara');
+      // Rami has not reached the bridge, whose cut-off has passed.
+      await waitFor(
+        () => org.alerts.any((a) => a.kind == AlertKind.cutoffMissed),
+        what: 'missed cut-off alert',
+      );
+      final missed = org.alerts.firstWhere(
+        (a) => a.kind == AlertKind.cutoffMissed,
+      );
+      expect(missed.participant.name, 'Rami');
+      expect(missed.detail, startsWith('Bridge closed at'));
 
       // The organizer's own report reaches the others.
       await waitFor(
@@ -214,85 +247,131 @@ void main() {
     },
   );
 
-  test('runner receives the route, navigates and reports off route', () async {
-    settings.displayName = 'Rami';
-    final code = generateEventCode();
-    final cipher = await EventCipher.forCode(normalizeEventCode(code)!);
-    final organizer = SimulatedDevice(cipher, host, port, 'sim-org');
-    addTearDown(organizer.relay.dispose);
-    await organizer.start();
-    await organizer.send(
-      organizer.topics.event,
-      EventInfo(
-        name: 'Hill repeats',
-        organizerId: 'org',
-        organizerName: 'Olga',
-        organizerPhone: '+201234567',
-        updated: DateTime.now(),
+  test(
+    'runner picks a distance, passes a checkpoint, goes off route',
+    () async {
+      settings.displayName = 'Rami';
+      final code = generateEventCode();
+      final cipher = await EventCipher.forCode(normalizeEventCode(code)!);
+      final organizer = SimulatedDevice(cipher, host, port, 'sim-org');
+      addTearDown(organizer.relay.dispose);
+      await organizer.start();
+      final short = Course(
+        id: 'c4',
+        name: '4 km',
         route: TrailRoute.fromShareJson(route.toShareJson()),
-      ).toJson(),
-    );
+        checkpoints: const [
+          Checkpoint(
+            id: 'cp1',
+            name: 'Water',
+            kind: CheckpointKind.water,
+            along: 500,
+          ),
+        ],
+      );
+      final long = Course.fromRoute(
+        TrailRoute.fromPoints('Long', [
+          for (var e = 0.0; e <= 10000; e += 500) offset(-5000, e),
+        ]),
+        id: 'c10',
+        name: '10 km',
+      );
+      final now = DateTime.now();
+      await organizer.send(
+        organizer.topics.event,
+        EventInfo(
+          name: 'Hill repeats',
+          organizerId: 'org',
+          organizerName: 'Olga',
+          organizerPhone: '+201234567',
+          updated: now,
+          courses: [long.info, short.info],
+        ).toJson(),
+      );
+      for (final c in [short, long]) {
+        await organizer.send(
+          organizer.topics.course(c.id),
+          CourseUpdate(c, now).toJson(),
+        );
+      }
 
-    final gps = StreamController<Position>();
-    final me = await RunSession.join(
-      settings,
-      Notifier(),
-      code: code.toLowerCase(),
-      role: Role.runner,
-      locationSource: () => gps.stream,
-    );
-    addTearDown(me.dispose);
-    await waitFor(() => me.route != null, what: 'route from organizer');
-    expect(me.event!.organizerPhone, '+201234567');
-    expect(settings.activeEvent!.code, normalizeEventCode(code));
+      final gps = StreamController<Position>();
+      final me = await RunSession.join(
+        settings,
+        Notifier(),
+        code: code.toLowerCase(),
+        role: Role.runner,
+        locationSource: () => gps.stream,
+      );
+      addTearDown(me.dispose);
+      await waitFor(() => me.courses.length == 2, what: 'both courses');
+      expect(me.needsCourseChoice, isTrue);
+      expect(me.courseList.map((c) => c.name), ['10 km', '4 km']);
+      me.selectCourse('c4');
+      expect(me.route!.points, short.route.points);
+      expect(settings.courseFor(normalizeEventCode(code)!), 'c4');
+      expect(me.event!.organizerPhone, '+201234567');
+      expect(settings.activeEvent!.code, normalizeEventCode(code));
 
-    for (var e = 0.0; e <= 1000; e += 20) {
-      gps.add(fixAt(offset(3, e)));
-    }
-    await waitFor(() => (me.match?.along ?? 0) > 990, what: 'progress');
-    expect(me.status, RunnerStatus.ok);
-    expect(me.distanceRun, closeTo(1000, 5));
+      for (var e = 0.0; e <= 1000; e += 20) {
+        gps.add(fixAt(offset(3, e)));
+      }
+      await waitFor(() => (me.match?.along ?? 0) > 990, what: 'progress');
+      expect(me.status, RunnerStatus.ok);
+      expect(me.distanceRun, closeTo(1000, 5));
+      expect(me.checkpoints!.passed.keys, ['cp1']);
 
-    // Wrong turn: 100+ m north of the trail.
-    for (var n = 40.0; n <= 160; n += 30) {
-      gps.add(fixAt(offset(n, 1000)));
-    }
-    await waitFor(() => me.status == RunnerStatus.offRoute, what: 'off route');
+      // The organizer sees which distance and when the checkpoint was passed.
+      await waitFor(
+        () => organizer.reports[settings.participantId]?.passes['cp1'] != null,
+        what: 'checkpoint pass report',
+      );
+      expect(organizer.reports[settings.participantId]!.course, 'c4');
 
-    // The organizer gets the off-route status straight away, with the
-    // breadcrumb trail of where the runner went.
-    await waitFor(
-      () =>
-          organizer.reports[settings.participantId]?.status ==
-          RunnerStatus.offRoute,
-      what: 'off-route report',
-    );
-    final report = organizer.reports[settings.participantId]!;
-    expect(report.name, 'Rami');
-    expect(report.along, closeTo(1000, 5));
-    expect(report.offBy, greaterThan(100));
+      // Wrong turn: 100+ m north of the trail.
+      for (var n = 40.0; n <= 160; n += 30) {
+        gps.add(fixAt(offset(n, 1000)));
+      }
+      await waitFor(
+        () => me.status == RunnerStatus.offRoute,
+        what: 'off route',
+      );
 
-    await organizer.send(
-      organizer.topics.announcement,
-      Announcement(
-        id: 'm1',
-        from: 'Olga',
-        text: 'Wait at the hut',
-        time: DateTime.now(),
-      ).toJson(),
-    );
-    await waitFor(
-      () => me.announcement?.text == 'Wait at the hut',
-      what: 'announcement',
-    );
+      // The organizer gets the off-route status straight away, with the
+      // breadcrumb trail of where the runner went.
+      await waitFor(
+        () =>
+            organizer.reports[settings.participantId]?.status ==
+            RunnerStatus.offRoute,
+        what: 'off-route report',
+      );
+      final report = organizer.reports[settings.participantId]!;
+      expect(report.name, 'Rami');
+      expect(report.along, closeTo(1000, 5));
+      expect(report.offBy, greaterThan(100));
 
-    await me.leave();
-    await waitFor(
-      () =>
-          organizer.reports[settings.participantId]?.status ==
-          RunnerStatus.left,
-      what: 'left status',
-    );
-    await gps.close();
-  });
+      await organizer.send(
+        organizer.topics.announcement,
+        Announcement(
+          id: 'm1',
+          from: 'Olga',
+          text: 'Wait at the hut',
+          time: DateTime.now(),
+        ).toJson(),
+      );
+      await waitFor(
+        () => me.announcement?.text == 'Wait at the hut',
+        what: 'announcement',
+      );
+
+      await me.leave();
+      await waitFor(
+        () =>
+            organizer.reports[settings.participantId]?.status ==
+            RunnerStatus.left,
+        what: 'left status',
+      );
+      await gps.close();
+    },
+  );
 }

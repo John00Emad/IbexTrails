@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ibex_trails/core/course.dart';
 import 'package:ibex_trails/core/group.dart';
 import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/core/route.dart';
@@ -66,20 +67,63 @@ void main() {
     expect(PositionReport.fromJson('junk'), isNull);
   });
 
-  test('event info carries the route', () {
+  test('event info lists courses; courses travel separately', () {
     final route = TrailRoute.fromPoints('R', eastLine(2000, step: 100));
+    final course = Course.fromRoute(route, id: 'c10', name: '10 km');
     final info = EventInfo(
       name: 'Sunday long run',
       organizerId: 'org1',
       organizerName: 'Sam',
       organizerPhone: '+201000000000',
       updated: t0,
-      route: route,
+      courses: [course.info],
     );
     final copy = EventInfo.fromJson(info.toJson())!;
     expect(copy.name, 'Sunday long run');
     expect(copy.organizerPhone, '+201000000000');
-    expect(copy.route!.points, route.points);
+    expect(copy.courses.single.name, '10 km');
+    expect(copy.courses.single.length, closeTo(2000, 2));
+
+    final update = CourseUpdate.fromJson(CourseUpdate(course, t0).toJson())!;
+    expect(update.updated, t0);
+    expect(update.course.route.points, route.points);
+  });
+
+  test('old single-route event info still decodes', () {
+    final route = TrailRoute.fromPoints('R', eastLine(2000, step: 100));
+    final legacy = {
+      't': 'event',
+      'n': 'Old',
+      'oi': 'o',
+      'u': t0.millisecondsSinceEpoch,
+      'rt': route.toShareJson(),
+    };
+    final info = EventInfo.fromJson(legacy)!;
+    expect(info.courses, isEmpty);
+    expect(info.legacyRoute!.points, route.points);
+  });
+
+  test('position report carries course and checkpoint timing', () {
+    final r = PositionReport(
+      id: 'a',
+      name: 'A',
+      role: Role.runner,
+      time: t0,
+      lat: 1,
+      lon: 2,
+      status: RunnerStatus.ok,
+      course: 'c25',
+      passes: {'cp1': t0.subtract(const Duration(minutes: 30))},
+      next: 'cp2',
+      eta: t0.add(const Duration(minutes: 40)),
+      started: t0.subtract(const Duration(hours: 1)),
+    );
+    final copy = PositionReport.fromJson(r.toJson())!;
+    expect(copy.course, 'c25');
+    expect(copy.passes['cp1'], t0.subtract(const Duration(minutes: 30)));
+    expect(copy.next, 'cp2');
+    expect(copy.eta, t0.add(const Duration(minutes: 40)));
+    expect(copy.started, t0.subtract(const Duration(hours: 1)));
   });
 
   test('topics', () {
@@ -87,6 +131,9 @@ void main() {
     expect(t.position('p1'), 'ibextrails/v1/abc123/pos/p1');
     expect(t.participantOf('ibextrails/v1/abc123/pos/p1'), 'p1');
     expect(t.participantOf('ibextrails/v1/abc123/event'), isNull);
+    expect(t.course('c5'), 'ibextrails/v1/abc123/course/c5');
+    expect(t.courseOf('ibextrails/v1/abc123/course/c5'), 'c5');
+    expect(t.courseOf('ibextrails/v1/abc123/pos/c5'), isNull);
   });
 
   test('group ordering, stale reports and trail merging', () {
@@ -175,5 +222,96 @@ void main() {
     final later = t0.add(const Duration(minutes: 30));
     g.apply(report('w', later, east: 5), later);
     expect(g.alerts(later, const AlertPolicy()), isEmpty);
+  });
+
+  test('cut-off alerts and the checkpoint board', () {
+    final course = Course(
+      id: 'c25',
+      name: '25 km',
+      route: TrailRoute.fromPoints('R', eastLine(25000, step: 1000)),
+      start: t0,
+      checkpoints: const [
+        Checkpoint(
+          id: 'cp1',
+          name: 'CP1',
+          kind: CheckpointKind.aid,
+          along: 10000,
+          cutoff: Duration(hours: 2),
+        ),
+        Checkpoint(
+          id: 'cp2',
+          name: 'CP2',
+          kind: CheckpointKind.aid,
+          along: 20000,
+          cutoff: Duration(hours: 4),
+        ),
+      ],
+    );
+    final now = t0.add(const Duration(hours: 2, minutes: 10));
+    PositionReport on(
+      String id,
+      double along, {
+      Map<String, DateTime> passes = const {},
+      String? next,
+      DateTime? eta,
+    }) => PositionReport(
+      id: id,
+      name: id,
+      role: Role.runner,
+      time: now,
+      lat: 0,
+      lon: 0,
+      status: RunnerStatus.ok,
+      along: along,
+      course: 'c25',
+      passes: passes,
+      next: next,
+      eta: eta,
+    );
+    final g = Group()
+      ..apply(
+        on(
+          'fast',
+          15000,
+          passes: {'cp1': t0.add(const Duration(hours: 1))},
+          next: 'cp2',
+          eta: t0.add(const Duration(hours: 3)),
+        ),
+        now,
+      )
+      ..apply(
+        on(
+          'slow',
+          16000,
+          passes: {'cp1': t0.add(const Duration(minutes: 110))},
+          next: 'cp2',
+          eta: t0.add(const Duration(hours: 4, minutes: 20)),
+        ),
+        now,
+      )
+      ..apply(on('late', 9000, next: 'cp1'), now)
+      ..apply(report('other', now, along: 1000), now);
+
+    final alerts = g.alerts(
+      now,
+      const AlertPolicy(),
+      courseOf: (id) => id == 'c25' ? course : null,
+    );
+    final keys = {for (final a in alerts) a.key};
+    expect(keys, {'late/cutoffMissed/cp1', 'slow/cutoffRisk/cp2'});
+    expect(alerts.first.detail, 'CP1 closed at 08:00');
+
+    final board = g.checkpointBoard(course, now);
+    expect(board[0].passed.map((e) => e.$1.id), ['fast', 'slow']);
+    expect(board[0].missed.single.id, 'late');
+    expect(board[1].pending.map((p) => p.id).toSet(), {'fast', 'slow', 'late'});
+    expect(board[0].cutoff, t0.add(const Duration(hours: 2)));
+
+    expect(g.byProgress(course: 'c25').map((p) => p.id), [
+      'slow',
+      'fast',
+      'late',
+    ]);
+    expect(g.spread(course: 'c25')!.$1.id, 'slow');
   });
 }
