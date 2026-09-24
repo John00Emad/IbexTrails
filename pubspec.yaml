@@ -1,0 +1,35 @@
+name: ibex_trails
+description: "Free group trail-running tracker with GPX navigation."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  battery_plus: ^7.1.1
+  cryptography: ^2.9.0
+  file_picker: ^13.1.0
+  flutter_local_notifications: ^22.3.1
+  flutter_map: ^8.3.2
+  geolocator: ^14.0.3
+  http: ^1.6.0
+  latlong2: ^0.10.1
+  mqtt_client: ^10.11.11
+  path_provider: ^2.1.6
+  share_plus: ^13.3.0
+  shared_preferences: ^2.5.5
+  typed_data: ^1.4.0
+  url_launcher: ^6.3.2
+  wakelock_plus: ^1.8.0
+  xml: ^7.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
