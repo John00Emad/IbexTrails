@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app.dart';
+import '../brand.dart';
 import '../core/group.dart';
 import '../core/protocol.dart';
 
@@ -48,14 +49,14 @@ class ParticipantStyle {
     }
     return switch (r.role) {
       Role.organizer => const ParticipantStyle(
-        Color(0xFF6A1B9A),
+        Brand.night,
         'Organizer',
-        Icons.star,
+        Icons.flag,
       ),
       Role.sweeper => const ParticipantStyle(
-        Color(0xFF00838F),
+        Color(0xFF6B4FA8),
         'Sweeper',
-        Icons.cleaning_services,
+        Icons.hiking,
       ),
       Role.runner => const ParticipantStyle(
         TrailColors.ok,

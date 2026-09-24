@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app.dart';
+import '../brand.dart';
 import '../core/route.dart';
 import '../state/run_session.dart';
 import 'route_picker.dart';
@@ -88,6 +89,18 @@ class _OrganizeScreenState extends State<OrganizeScreen> {
               validator: (v) => (v == null || v.trim().isEmpty)
                   ? 'Give the run a name'
                   : null,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final idea in Brand.eventIdeas)
+                  ActionChip(
+                    label: Text(idea),
+                    onPressed: () => setState(() => _eventName.text = idea),
+                  ),
+              ],
             ),
             const SizedBox(height: 16),
             TextFormField(

@@ -131,6 +131,32 @@ feel the alarm.
 - Tile servers are volunteer-run. Offline saving is limited to a narrow
   corridor along the route, as their usage policies ask.
 
+## Branding
+
+The look (a desert palette, the ibex emblem, the landscape header and the
+Cairo font) lives in **`lib/brand.dart`**:
+
+- `Brand` holds the app name, tagline, community line, suggested event names
+  and colours. Change them there and the whole app follows.
+- The ibex emblem (`IbexBadge`), the home screen landscape (`DesertBackdrop`)
+  and the launcher icon art (`AppIconPainter`) are drawn in code. They're
+  original artwork, not a club logo. To use an official logo instead,
+  replace `IbexBadge` with an `Image.asset`.
+- To regenerate the launcher icons after changing the art:
+
+  ```sh
+  IBEX_ICON_OUT=/tmp/icon.png flutter test test/tool/app_icon_test.dart
+  # then resize /tmp/icon.png into android/app/src/main/res/mipmap-*/ic_launcher.png
+  # and ios/Runner/Assets.xcassets/AppIcon.appiconset/ (sizes in Contents.json)
+  ```
+
+The app is meant for the Wadi Ibex / Ultra Ibex trail community. Get the
+clubs' written permission before publishing with their names or logos.
+`Brand.communityLine` shows how to switch the wording once they approve.
+
+Fonts: [Cairo](https://github.com/Gue3bara/Cairo) (SIL Open Font License,
+`assets/fonts/OFL.txt`). It covers Latin and Arabic.
+
 ## Development
 
 ```

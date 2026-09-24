@@ -46,7 +46,7 @@ class ElevationProfile extends StatelessWidget {
           label: Theme.of(context).textTheme.labelSmall!
               .copyWith(color: scheme.onSurfaceVariant, fontSize: 10),
           me: TrailColors.me,
-          waypoint: scheme.tertiary,
+          waypoint: scheme.secondary,
         ),
       ),
     );

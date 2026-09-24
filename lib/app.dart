@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'brand.dart';
 import 'services/notifications.dart';
 import 'services/settings.dart';
 import 'ui/home_screen.dart';
@@ -24,15 +25,17 @@ class AppScope extends InheritedWidget {
       settings != oldWidget.settings || notifier != oldWidget.notifier;
 }
 
-/// Brand colours: trail orange for routes, forest green for the UI.
+/// Map and status colours. Status colours stay conventional (green ok,
+/// amber warning, red danger) so they read instantly in the sun.
 abstract final class TrailColors {
-  static const forest = Color(0xFF2E6B3F);
-  static const route = Color(0xFFE8590C);
+  static const primary = Brand.canyon;
+  static const route = Brand.ember;
+  static const routeCasing = Brand.night;
   static const routeDone = Color(0xFF8A8F98);
   static const me = Color(0xFF1C6DD0);
-  static const danger = Color(0xFFC62828);
-  static const warning = Color(0xFFEF8F00);
-  static const ok = Color(0xFF2E7D32);
+  static const danger = Color(0xFFD62839);
+  static const warning = Color(0xFFE89B00);
+  static const ok = Color(0xFF2E8B57);
 }
 
 class IbexTrailsApp extends StatelessWidget {
@@ -45,23 +48,96 @@ class IbexTrailsApp extends StatelessWidget {
   final AppSettings settings;
   final Notifier notifier;
 
-  ThemeData _theme(Brightness brightness) {
+  static ThemeData theme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
     final scheme = ColorScheme.fromSeed(
-      seedColor: TrailColors.forest,
+      seedColor: Brand.canyon,
       brightness: brightness,
+      primary: dark ? const Color(0xFFFFB590) : Brand.canyon,
+      secondary: dark ? const Color(0xFF7FD3CB) : Brand.oasis,
+      surface: dark ? const Color(0xFF151B24) : Brand.limestone,
     );
-    return ThemeData(
+    final base = ThemeData(
       colorScheme: scheme,
       useMaterial3: true,
-      visualDensity: VisualDensity.standard,
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
+      fontFamily: Brand.fontFamily,
+      scaffoldBackgroundColor: scheme.surface,
+    );
+    return base.copyWith(
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Brand.night,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        titleTextStyle: TextStyle(
+          fontFamily: Brand.fontFamily,
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+          color: Colors.white,
+        ),
+      ),
+      cardTheme: CardThemeData(
+        elevation: 0,
+        color: dark ? const Color(0xFF1F2733) : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(
+            color: dark ? Colors.white10 : Brand.sand.withValues(alpha: 0.9),
+          ),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: dark ? const Color(0xFF1F2733) : Colors.white,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: dark ? Colors.white24 : Brand.sandDeep),
+        ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          minimumSize: const Size.fromHeight(52),
-          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          minimumSize: const Size.fromHeight(54),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          textStyle: const TextStyle(
+            fontFamily: Brand.fontFamily,
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
+          ),
         ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          textStyle: const TextStyle(
+            fontFamily: Brand.fontFamily,
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: SegmentedButton.styleFrom(
+          selectedBackgroundColor: scheme.primaryContainer,
+          textStyle: const TextStyle(
+            fontFamily: Brand.fontFamily,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      chipTheme: base.chipTheme.copyWith(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: Brand.night,
+        foregroundColor: Colors.white,
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: scheme.surface,
+        showDragHandle: true,
       ),
     );
   }
@@ -72,10 +148,10 @@ class IbexTrailsApp extends StatelessWidget {
       settings: settings,
       notifier: notifier,
       child: MaterialApp(
-        title: 'IbexTrails',
+        title: Brand.appName,
         debugShowCheckedModeBanner: false,
-        theme: _theme(Brightness.light),
-        darkTheme: _theme(Brightness.dark),
+        theme: theme(Brightness.light),
+        darkTheme: theme(Brightness.dark),
         home: const HomeScreen(),
       ),
     );

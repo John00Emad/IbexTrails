@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../app.dart';
+import '../brand.dart';
 import '../core/geo.dart';
 import '../core/group.dart';
 import '../services/location_service.dart';
@@ -681,7 +682,8 @@ class _ConnectionLine extends StatelessWidget {
               child: Text(
                 '$text · ${session.displayCode}',
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall,
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: Colors.white70, letterSpacing: 0.5),
               ),
             ),
           ],
@@ -861,10 +863,10 @@ class _StatsPanel extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 6),
                   child: Row(
                     children: [
-                      Icon(
+                      const Icon(
                         Icons.location_on,
                         size: 18,
-                        color: theme.colorScheme.tertiary,
+                        color: Brand.oasis,
                       ),
                       const SizedBox(width: 4),
                       Expanded(
@@ -910,7 +912,9 @@ class _Stat extends StatelessWidget {
         Text(
           label.toUpperCase(),
           style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+            color: theme.colorScheme.primary,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.8,
           ),
         ),
         FittedBox(
@@ -922,7 +926,8 @@ class _Stat extends StatelessWidget {
                 TextSpan(
                   text: value,
                   style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w900,
+                    height: 1.15,
                   ),
                 ),
                 if (suffix != null)

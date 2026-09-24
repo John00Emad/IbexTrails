@@ -49,7 +49,9 @@ class _GroupList extends StatelessWidget {
           child: Text(
             '${session.event?.name ?? 'Group'} · ${people.length} '
             '${people.length == 1 ? 'person' : 'people'}',
-            style: theme.textTheme.titleLarge,
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
         if (spread != null && spread.$1 != spread.$2)
@@ -78,7 +80,10 @@ class _GroupList extends StatelessWidget {
                     ? TrailColors.danger
                     : TrailColors.warning,
               ),
-              title: Text('${a.participant.name}: ${a.kind.label}'),
+              title: Text(
+                '${a.participant.name}: ${a.kind.label}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
               subtitle: Text(a.detail),
               onTap: () => Navigator.pop(context, a.participant.id),
             ),
@@ -152,7 +157,10 @@ class _PersonTile extends StatelessWidget {
         foregroundColor: Colors.white,
         child: Text(initials(participant.name)),
       ),
-      title: Text('${participant.name}${isMe ? ' (you)' : ''}'),
+      title: Text(
+        '${participant.name}${isMe ? ' (you)' : ''}',
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ),
       subtitle: Text('${r.role.label} · ${facts.join(' · ')}'),
       trailing: Chip(
         avatar: Icon(style.icon, size: 16, color: style.color),

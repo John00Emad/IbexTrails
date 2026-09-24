@@ -5,6 +5,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../app.dart';
+import '../brand.dart';
 import '../core/geo.dart';
 import '../core/route.dart';
 import '../services/map_tiles.dart';
@@ -97,10 +98,14 @@ class _TrailMapState extends State<TrailMap> {
           child: Transform.rotate(
             angle: bearing * math.pi / 180,
             child: DecoratedBox(
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              decoration: BoxDecoration(
+                color: color,
+                shape: BoxShape.circle,
+                border: Border.all(color: TrailColors.routeCasing, width: 1.5),
+              ),
               child: const Icon(
                 Icons.navigation,
-                size: 13,
+                size: 12,
                 color: Colors.white,
               ),
             ),
@@ -181,8 +186,9 @@ class _TrailMapState extends State<TrailMap> {
               points: todo,
               color: TrailColors.route,
               strokeWidth: 5,
-              borderColor: Colors.white,
-              borderStrokeWidth: 1.5,
+              // Dark casing keeps the line visible on pale desert tiles.
+              borderColor: TrailColors.routeCasing.withValues(alpha: 0.85),
+              borderStrokeWidth: 2,
             ),
           ],
         ),
@@ -399,14 +405,13 @@ class _WaypointPin extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
           decoration: BoxDecoration(
-            color: scheme.tertiaryContainer,
+            color: Brand.night,
             borderRadius: BorderRadius.circular(8),
             boxShadow: const [BoxShadow(blurRadius: 2, color: Colors.black26)],
           ),
@@ -414,14 +419,14 @@ class _WaypointPin extends StatelessWidget {
             name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: scheme.onTertiaryContainer,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
             ),
           ),
         ),
-        Icon(Icons.location_on, size: 20, color: scheme.tertiary),
+        const Icon(Icons.location_on, size: 20, color: Brand.oasis),
       ],
     );
   }

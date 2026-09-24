@@ -48,6 +48,15 @@ Future<void> _loadFonts() async {
     roboto.addFont(load(f));
   }
   await roboto.load();
+  final cairo = FontLoader('Cairo');
+  for (final w in ['Regular', 'SemiBold', 'Bold', 'Black']) {
+    cairo.addFont(
+      File('assets/fonts/Cairo-$w.ttf')
+          .readAsBytes()
+          .then(ByteData.sublistView),
+    );
+  }
+  await cairo.load();
   await (FontLoader(
     'MaterialIcons',
   )..addFont(load('MaterialIcons-Regular.otf'))).load();
@@ -150,10 +159,7 @@ void main() {
         notifier: notifier,
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(seedColor: TrailColors.forest),
-            fontFamily: 'Roboto',
-          ),
+          theme: IbexTrailsApp.theme(Brightness.light),
           home: home,
         ),
       ),
