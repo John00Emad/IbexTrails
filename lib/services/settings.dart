@@ -98,6 +98,18 @@ class AppSettings extends ChangeNotifier {
       MapStyle.topo;
   set mapStyle(MapStyle v) => _set('mapStyle', v.name);
 
+  /// Buzz before turns in the route.
+  bool get turnWarnings => _prefs.getBool('turnWarnings') ?? true;
+  set turnWarnings(bool v) => _set('turnWarnings', v);
+
+  /// Also say turn warnings out loud.
+  bool get voiceCues => _prefs.getBool('voiceCues') ?? true;
+  set voiceCues(bool v) => _set('voiceCues', v);
+
+  /// How far before a turn to warn (m).
+  int get turnWarnMeters => _prefs.getInt('turnWarnMeters') ?? 60;
+  set turnWarnMeters(int v) => _set('turnWarnMeters', v);
+
   bool get keepScreenOn => _prefs.getBool('keepScreenOn') ?? false;
   set keepScreenOn(bool v) => _set('keepScreenOn', v);
 

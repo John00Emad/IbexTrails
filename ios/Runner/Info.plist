@@ -54,7 +54,10 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
+		<string>audio</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>IbexTrails uses the camera to scan the event QR code on the organizer's phone.</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>tel</string>

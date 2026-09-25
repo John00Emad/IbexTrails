@@ -86,6 +86,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onChanged: (v) => s.offRouteMeters = v,
             ),
             SwitchListTile(
+              title: const Text('Warn before turns'),
+              subtitle: const Text(
+                'Vibrates before sharp turns, forks in the route and '
+                'switchbacks, so you don\'t miss the trail.',
+              ),
+              value: s.turnWarnings,
+              onChanged: (v) => s.turnWarnings = v,
+            ),
+            if (s.turnWarnings) ...[
+              SwitchListTile(
+                title: const Text('Say it out loud'),
+                subtitle: const Text('"Sharp left in 60 metres"'),
+                value: s.voiceCues,
+                onChanged: (v) => s.voiceCues = v,
+              ),
+              ListTile(
+                title: const Text('Warn this far before a turn'),
+                trailing: DropdownButton<int>(
+                  value: s.turnWarnMeters,
+                  items: [
+                    for (final m in const [40, 60, 100])
+                      DropdownMenuItem(value: m, child: Text('$m m')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) s.turnWarnMeters = v;
+                  },
+                ),
+              ),
+            ],
+            SwitchListTile(
               title: const Text('Keep screen on while running'),
               subtitle: const Text(
                 'Uses more battery. Alerts work with the '

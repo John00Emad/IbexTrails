@@ -44,4 +44,19 @@ void main() {
     expect(normalizeEventCode('ABCDE-FGHJ0'), isNull, reason: '0 not allowed');
     expect(formatEventCode('ABCDEFGHJK'), 'ABCDE-FGHJK');
   });
+
+  test('finds the event code in an invite or scanned QR text', () {
+    expect(
+      findEventCode(
+        'Join my trail run "Friday team run" on IbexTrails.\n'
+        'Event code: K7MPQ-W3XZA',
+      ),
+      'K7MPQW3XZA',
+    );
+    expect(findEventCode('code k7mpqw3xza please'), 'K7MPQW3XZA');
+    // Words that look like codes but use letters codes never contain.
+    expect(findEventCode('Hello there IbexTrails'), isNull);
+    expect(findEventCode('https://example.com/photo123'), isNull);
+    expect(findEventCode(''), isNull);
+  });
 }

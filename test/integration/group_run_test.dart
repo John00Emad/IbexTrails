@@ -65,6 +65,7 @@ class SimulatedDevice {
   final RelayClient relay;
   EventInfo? event;
   final courses = <String, Course>{};
+  Roster? roster;
   bool eventCleared = false;
   Announcement? announcement;
   final reports = <String, PositionReport>{};
@@ -77,6 +78,8 @@ class SimulatedDevice {
         } else {
           event = EventInfo.fromJson(await cipher.open(m.payload));
         }
+      } else if (m.topic == topics.roster && m.payload.isNotEmpty) {
+        roster = Roster.fromJson(await cipher.open(m.payload));
       } else if (topics.courseOf(m.topic) != null && m.payload.isNotEmpty) {
         final u = CourseUpdate.fromJson(await cipher.open(m.payload));
         if (u != null) courses[u.course.id] = u.course;
@@ -238,6 +241,46 @@ void main() {
       expect(await org.announce('Regroup at the bridge'), isTrue);
       await waitFor(() => runner.announcement != null, what: 'announcement');
       expect(runner.announcement!.text, 'Regroup at the bridge');
+
+      // Headcount: Rami drops out and confirms he's safe; Sara (SOS) is
+      // picked up by car and the organizer ticks her off. Sweepers get the
+      // same roster.
+      await runner.send(
+        runner.topics.position('r1'),
+        PositionReport(
+          id: 'r1',
+          name: 'Rami',
+          role: Role.runner,
+          time: DateTime.now(),
+          lat: p1.lat,
+          lon: p1.lon,
+          status: RunnerStatus.left,
+          along: 2500,
+          course: 'c1',
+          safe: true,
+        ).toJson(),
+      );
+      await waitFor(
+        () => org.headcount().safeOut.any((p) => p.id == 'r1'),
+        what: 'safe drop-out in headcount',
+      );
+      expect(org.headcount().unaccounted, isEmpty);
+      expect(org.headcount().onCourse.single.id, 'r2');
+
+      org.markAccountedFor('r2', 'Picked up by car');
+      await waitFor(
+        () => runner.roster?.accountedFor['r2'] == 'Picked up by car',
+        what: 'roster on the sweeper phone',
+      );
+      final hc = org.headcount();
+      expect(hc.allIn, isTrue);
+      expect(hc.safeOut.map((p) => p.id).toSet(), {'r1', 'r2'});
+      // SOS still shows even when accounted for; cut-off alerts don't.
+      expect(
+        org.alerts.where((a) => a.participant.id == 'r1'),
+        isEmpty,
+        reason: 'confirmed safe',
+      );
 
       // Ending the event clears it from the relay.
       await org.leave(endEvent: true);

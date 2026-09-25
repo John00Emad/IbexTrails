@@ -76,6 +76,8 @@ enum AlertKind {
   offRoute('Off route'),
   wrongWay('Wrong way'),
   cutoffMissed('Missed cut-off'),
+  leftUnconfirmed('Left, not confirmed safe'),
+  behindSweeper('Behind the sweeper'),
   noSignal('No signal'),
   stopped('Not moving'),
   cutoffRisk('Behind cut-off pace'),
@@ -116,14 +118,57 @@ class CheckpointRow {
   final List<Participant> missed;
 }
 
+/// Where everyone is, so the organizer can be sure nobody is left out on
+/// the course.
+class Headcount {
+  Headcount({
+    required this.notStarted,
+    required this.onCourse,
+    required this.finished,
+    required this.safeOut,
+    required this.unaccounted,
+  });
+
+  /// Joined but not really under way yet.
+  final List<Participant> notStarted;
+  final List<Participant> onCourse;
+  final List<Participant> finished;
+
+  /// Dropped out and confirmed safe, or ticked off by the organizer.
+  final List<Participant> safeOut;
+
+  /// Left without confirming they're safe, or silent for a long time.
+  final List<Participant> unaccounted;
+
+  int get total =>
+      notStarted.length +
+      onCourse.length +
+      finished.length +
+      safeOut.length +
+      unaccounted.length;
+
+  /// Finished or safely out.
+  int get accountedFor => finished.length + safeOut.length;
+
+  /// Everyone is home: nobody left on the course or missing.
+  bool get allIn => total > 0 && accountedFor == total;
+}
+
 /// Alerting thresholds for the organizer.
 class AlertPolicy {
   const AlertPolicy({
     this.noSignalAfter = const Duration(minutes: 5),
     this.stoppedAfter = const Duration(minutes: 10),
     this.lowBatteryPercent = 15,
+    this.lostAfter = const Duration(minutes: 15),
+    this.behindSweeperBy = 200,
   });
 
+  /// Silence after which a runner counts as unaccounted in the headcount.
+  final Duration lostAfter;
+
+  /// How far (m) behind the last sweeper a runner must be to raise an alert.
+  final double behindSweeperBy;
   final Duration noSignalAfter;
   final Duration stoppedAfter;
   final int lowBatteryPercent;
@@ -179,23 +224,51 @@ class Group {
 
   /// All conditions that currently need the organizer's attention.
   /// [courseOf] resolves a runner's course, for checkpoint cut-offs.
+  /// People in [accountedFor] (ticked off by the organizer) only raise SOS.
   List<GroupAlert> alerts(
     DateTime now,
     AlertPolicy policy, {
     Course? Function(String? id)? courseOf,
+    Set<String> accountedFor = const {},
   }) {
     final out = <GroupAlert>[];
+    final sweepers = _rearmostSweepers(now, policy);
     for (final p in _byId.values) {
       final r = p.latest;
-      final course = courseOf?.call(r.course);
-      if (course != null && r.status != RunnerStatus.left) {
-        out.addAll(_cutoffAlerts(p, course, now));
-      }
-      if (r.status == RunnerStatus.left) continue;
       if (r.status == RunnerStatus.sos) {
         out.add(GroupAlert(p, AlertKind.sos, 'needs help'));
       }
+      if (accountedFor.contains(p.id)) continue;
+      if (r.status == RunnerStatus.left) {
+        if (!r.safe) {
+          out.add(
+            GroupAlert(
+              p,
+              AlertKind.leftUnconfirmed,
+              'closed the app at ${_clock(r.time)} without confirming they '
+              'are off the course',
+            ),
+          );
+        }
+        continue;
+      }
+      final course = courseOf?.call(r.course);
+      if (course != null) out.addAll(_cutoffAlerts(p, course, now));
       if (r.status == RunnerStatus.finished) continue;
+      final sweeperAlong = sweepers[r.course];
+      if (r.role == Role.runner &&
+          r.along != null &&
+          sweeperAlong != null &&
+          r.along! < sweeperAlong - policy.behindSweeperBy) {
+        out.add(
+          GroupAlert(
+            p,
+            AlertKind.behindSweeper,
+            '${formatDistance(sweeperAlong - r.along!)} behind the last '
+            'sweeper',
+          ),
+        );
+      }
       final silent = now.difference(p.lastHeard);
       if (silent > policy.noSignalAfter) {
         out.add(
@@ -238,6 +311,59 @@ class Group {
     }
     out.sort((a, b) => a.kind.index.compareTo(b.kind.index));
     return out;
+  }
+
+  /// Progress of the rearmost active sweeper on each course.
+  Map<String?, double> _rearmostSweepers(DateTime now, AlertPolicy policy) {
+    final out = <String?, double>{};
+    for (final p in _byId.values) {
+      final r = p.latest;
+      if (r.role != Role.sweeper || !p.isActive() || r.along == null) continue;
+      if (now.difference(p.lastHeard) > policy.noSignalAfter) continue;
+      final prev = out[r.course];
+      if (prev == null || r.along! < prev) out[r.course] = r.along!;
+    }
+    return out;
+  }
+
+  /// Sorts everyone (optionally on one [course]) into headcount buckets.
+  /// [exclude] leaves out the viewer, e.g. the organizer at the finish.
+  Headcount headcount(
+    DateTime now, {
+    String? course,
+    Set<String> accountedFor = const {},
+    String? exclude,
+    AlertPolicy policy = const AlertPolicy(),
+  }) {
+    final notStarted = <Participant>[];
+    final onCourse = <Participant>[];
+    final finished = <Participant>[];
+    final safeOut = <Participant>[];
+    final unaccounted = <Participant>[];
+    for (final p in byProgress(course: course)) {
+      if (p.id == exclude) continue;
+      final r = p.latest;
+      if (r.status == RunnerStatus.finished) {
+        finished.add(p);
+      } else if (accountedFor.contains(p.id) ||
+          (r.status == RunnerStatus.left && r.safe)) {
+        safeOut.add(p);
+      } else if (r.status == RunnerStatus.left ||
+          now.difference(p.lastHeard) > policy.lostAfter) {
+        unaccounted.add(p);
+      } else if ((r.along ?? 0) < 200 && r.passes.isEmpty && !p.hasMoved) {
+        notStarted.add(p);
+      } else {
+        onCourse.add(p);
+      }
+    }
+    return Headcount(
+      notStarted: notStarted,
+      onCourse: onCourse,
+      finished: finished,
+      safeOut: safeOut,
+      unaccounted: unaccounted,
+    );
   }
 
   List<GroupAlert> _cutoffAlerts(Participant p, Course course, DateTime now) {

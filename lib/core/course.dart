@@ -1,5 +1,6 @@
 import 'geo.dart';
 import 'route.dart';
+import 'turns.dart';
 
 enum CheckpointKind {
   checkpoint('cp', 'Checkpoint'),
@@ -146,6 +147,9 @@ class Course {
   final String name;
   final TrailRoute route;
   final List<Checkpoint> checkpoints;
+
+  /// Turns found in the route's shape, for turn warnings.
+  late final List<Turn> turns = detectTurns(route);
 
   /// Scheduled start (wave start). Null for casual runs, in which case
   /// cut-offs count from when each runner starts.

@@ -4,12 +4,20 @@ import '../app.dart';
 import '../core/course.dart';
 import '../core/geo.dart';
 import '../core/group.dart';
+import '../core/protocol.dart';
 import '../state/run_session.dart';
 import 'status_style.dart';
 
+enum GroupView { runners, checkpoints, headcount }
+
 /// Everyone in the event, furthest along first, with alerts on top, plus a
-/// checkpoint board. Returns the id of a participant to show on the map.
-Future<String?> showGroupSheet(BuildContext context, RunSession session) {
+/// checkpoint board and a headcount. Returns the id of a participant to show
+/// on the map.
+Future<String?> showGroupSheet(
+  BuildContext context,
+  RunSession session, {
+  GroupView view = GroupView.runners,
+}) {
   return showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
@@ -21,17 +29,23 @@ Future<String?> showGroupSheet(BuildContext context, RunSession session) {
       maxChildSize: 0.95,
       builder: (context, scroll) => ListenableBuilder(
         listenable: session,
-        builder: (context, _) => _GroupSheet(session: session, scroll: scroll),
+        builder: (context, _) =>
+            _GroupSheet(session: session, scroll: scroll, view: view),
       ),
     ),
   );
 }
 
 class _GroupSheet extends StatefulWidget {
-  const _GroupSheet({required this.session, required this.scroll});
+  const _GroupSheet({
+    required this.session,
+    required this.scroll,
+    required this.view,
+  });
 
   final RunSession session;
   final ScrollController scroll;
+  final GroupView view;
 
   @override
   State<_GroupSheet> createState() => _GroupSheetState();
@@ -40,14 +54,17 @@ class _GroupSheet extends StatefulWidget {
 class _GroupSheetState extends State<_GroupSheet> {
   /// Course filter; null shows everyone.
   String? _course;
-  bool _board = false;
+  late GroupView _view = widget.view;
 
   RunSession get s => widget.session;
 
   @override
   void initState() {
     super.initState();
-    _course = s.courseList.length > 1 ? s.course?.id : null;
+    // The headcount starts with everyone; the other views with my distance.
+    _course = s.courseList.length > 1 && _view != GroupView.headcount
+        ? s.course?.id
+        : null;
   }
 
   @override
@@ -56,6 +73,10 @@ class _GroupSheetState extends State<_GroupSheet> {
     final courses = s.courseList;
     final selected = _course == null ? null : s.courses[_course];
     final people = s.group.byProgress(course: _course);
+    final hasBoard = selected != null && selected.checkpoints.isNotEmpty;
+    final view = _view == GroupView.checkpoints && !hasBoard
+        ? GroupView.runners
+        : _view;
 
     return ListView(
       controller: widget.scroll,
@@ -83,32 +104,221 @@ class _GroupSheetState extends State<_GroupSheet> {
               ],
             ),
           ),
-        if (selected != null && selected.checkpoints.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-            child: SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(
-                  value: false,
-                  icon: Icon(Icons.groups),
-                  label: Text('Runners'),
-                ),
-                ButtonSegment(
-                  value: true,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+          child: SegmentedButton<GroupView>(
+            showSelectedIcon: false,
+            segments: [
+              const ButtonSegment(
+                value: GroupView.runners,
+                icon: Icon(Icons.groups),
+                label: Text('Runners'),
+              ),
+              if (hasBoard)
+                const ButtonSegment(
+                  value: GroupView.checkpoints,
                   icon: Icon(Icons.flag),
                   label: Text('Checkpoints'),
                 ),
-              ],
-              selected: {_board},
-              onSelectionChanged: (v) => setState(() => _board = v.first),
-            ),
+              const ButtonSegment(
+                value: GroupView.headcount,
+                icon: Icon(Icons.fact_check_outlined),
+                label: Text('Headcount'),
+              ),
+            ],
+            selected: {view},
+            onSelectionChanged: (v) => setState(() => _view = v.first),
           ),
-        if (_board && selected != null)
-          ..._checkpointBoard(context, selected)
-        else
-          ..._runners(context, people),
+        ),
+        ...switch (view) {
+          GroupView.checkpoints => _checkpointBoard(context, selected!),
+          GroupView.headcount => _headcount(context),
+          GroupView.runners => _runners(context, people),
+        },
       ],
     );
+  }
+
+  List<Widget> _headcount(BuildContext context) {
+    final theme = Theme.of(context);
+    final now = DateTime.now();
+    final hc = s.headcount(courseId: _course);
+    Widget tile(String label, int n, Color color) => Expanded(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          children: [
+            Text(
+              '$n',
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w900,
+                color: color,
+              ),
+            ),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.labelSmall,
+            ),
+          ],
+        ),
+      ),
+    );
+    Widget header(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Text(
+        text,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+    Widget person(Participant p, String detail, {bool canTick = false}) =>
+        ListTile(
+          dense: true,
+          leading: CircleAvatar(
+            radius: 16,
+            backgroundColor: ParticipantStyle.of(p, now, s.alertPolicy).color,
+            foregroundColor: Colors.white,
+            child: Text(initials(p.name), style: const TextStyle(fontSize: 12)),
+          ),
+          title: Text(
+            p.name,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          subtitle: Text(detail),
+          onTap: () => Navigator.pop(context, p.id),
+          trailing: canTick && s.isOrganizer
+              ? TextButton(
+                  onPressed: () => _markSafe(context, p),
+                  child: const Text('Mark safe'),
+                )
+              : null,
+        );
+    String lastSeen(Participant p) =>
+        'last heard ${formatAgo(p.lastHeard, now)} ago'
+        '${p.latest.along == null ? '' : ' at ${formatDistance(p.latest.along!)}'}';
+
+    return [
+      const SizedBox(height: 12),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: [
+            tile(
+              'On course',
+              hc.onCourse.length + hc.notStarted.length,
+              theme.colorScheme.primary,
+            ),
+            tile('Finished', hc.finished.length, TrailColors.ok),
+            tile('Safely out', hc.safeOut.length, Colors.blueGrey),
+            tile(
+              'Unaccounted',
+              hc.unaccounted.length,
+              hc.unaccounted.isEmpty ? Colors.grey : TrailColors.danger,
+            ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: Text(
+          hc.total == 0
+              ? 'Nobody has joined yet.'
+              : hc.allIn
+              ? 'Everyone is accounted for: ${hc.accountedFor} of ${hc.total}.'
+              : '${hc.accountedFor} of ${hc.total} accounted for.',
+          style: theme.textTheme.bodyLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: hc.allIn ? TrailColors.ok : null,
+          ),
+        ),
+      ),
+      if (hc.unaccounted.isNotEmpty) ...[
+        header('Unaccounted: check on these first'),
+        for (final p in hc.unaccounted)
+          person(
+            p,
+            p.latest.status == RunnerStatus.left
+                ? 'closed the app without confirming they are safe'
+                : 'no signal: ${lastSeen(p)}',
+            canTick: true,
+          ),
+      ],
+      if (hc.onCourse.isNotEmpty) ...[
+        header('On course'),
+        for (final p in hc.onCourse) person(p, lastSeen(p), canTick: true),
+      ],
+      if (hc.notStarted.isNotEmpty) ...[
+        header('At the start'),
+        for (final p in hc.notStarted) person(p, lastSeen(p), canTick: true),
+      ],
+      if (hc.finished.isNotEmpty) ...[
+        header('Finished'),
+        for (final p in hc.finished)
+          person(p, 'finished at ${clock(p.latest.time)}'),
+      ],
+      if (hc.safeOut.isNotEmpty) ...[
+        header('Safely out'),
+        for (final p in hc.safeOut)
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.verified_user, color: Colors.blueGrey),
+            title: Text(p.name),
+            subtitle: Text(
+              s.accountedFor[p.id] ?? 'confirmed they are off the course',
+            ),
+            trailing: s.isOrganizer && s.accountedFor.containsKey(p.id)
+                ? TextButton(
+                    onPressed: () => s.markAccountedFor(p.id, null),
+                    child: const Text('Undo'),
+                  )
+                : null,
+          ),
+      ],
+    ];
+  }
+
+  Future<void> _markSafe(BuildContext context, Participant p) async {
+    final note = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Mark ${p.name} as safe?'),
+        content: TextField(
+          controller: note,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Note (optional)',
+            hintText: 'e.g. Picked up by car at CP2',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Mark safe'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      s.markAccountedFor(
+        p.id,
+        note.text.trim().isEmpty
+            ? 'Marked safe by organizer'
+            : note.text.trim(),
+      );
+    }
+    note.dispose();
   }
 
   Widget _chip(String label, String? id) => Padding(
@@ -116,10 +326,7 @@ class _GroupSheetState extends State<_GroupSheet> {
     child: ChoiceChip(
       label: Text(label),
       selected: _course == id,
-      onSelected: (_) => setState(() {
-        _course = id;
-        if (id == null) _board = false;
-      }),
+      onSelected: (_) => setState(() => _course = id),
     ),
   );
 
@@ -243,7 +450,9 @@ class _GroupSheetState extends State<_GroupSheet> {
   static Color _alertColor(AlertKind k) => switch (k) {
     AlertKind.sos ||
     AlertKind.offRoute ||
-    AlertKind.cutoffMissed => TrailColors.danger,
+    AlertKind.cutoffMissed ||
+    AlertKind.leftUnconfirmed ||
+    AlertKind.behindSweeper => TrailColors.danger,
     _ => TrailColors.warning,
   };
 
@@ -252,6 +461,8 @@ class _GroupSheetState extends State<_GroupSheet> {
     AlertKind.offRoute => Icons.wrong_location,
     AlertKind.wrongWay => Icons.u_turn_left,
     AlertKind.cutoffMissed => Icons.timer_off,
+    AlertKind.leftUnconfirmed => Icons.person_off,
+    AlertKind.behindSweeper => Icons.hiking,
     AlertKind.noSignal => Icons.signal_cellular_connected_no_internet_0_bar,
     AlertKind.stopped => Icons.pause_circle_outline,
     AlertKind.cutoffRisk => Icons.timer,

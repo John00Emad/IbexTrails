@@ -16,6 +16,10 @@ built with Flutter.
 |---|---|---|
 | ![Checkpoint line and fuel reminder](docs/screenshots/6_run_checkpoint_fuel.png) | ![Fuel sheet](docs/screenshots/7_fuel_sheet.png) | ![Course picker](docs/screenshots/8_course_picker.png) |
 
+| Turn warning | Headcount | Join by QR |
+|---|---|---|
+| ![Turn warning](docs/screenshots/12_turn_warning.png) | ![Headcount](docs/screenshots/10_headcount.png) | ![QR code](docs/screenshots/11_qr.png) |
+
 *(Screens rendered in the test harness, where map tiles are not downloaded, so
 the map background is blank. On a phone you see OpenTopoMap/OpenStreetMap.)*
 
@@ -25,6 +29,11 @@ the map background is blank. On a phone you see OpenTopoMap/OpenStreetMap.)*
 - **GPX navigation.** Load any `.gpx` file (from Strava, Komoot, Garmin,
   Wikiloc and so on). You see the route, arrows showing which way to run,
   waypoints, and your position.
+- **Warnings before turns.** The app finds the sharp turns, U-turns and
+  switchbacks in the GPX itself. About 60 m before each one the phone
+  vibrates and says it out loud ("Sharp left in 60 metres"), over your music
+  and with the screen off. The next turn also shows under the stats. It
+  helps you avoid a wrong turn instead of only warning you afterwards.
 - **Off-route alarm.** If you drift more than 50 m (you can change this) from
   the trail, the phone vibrates and shows a notification, even in your pocket
   with the screen off. It also tells you which direction the trail is (e.g.
@@ -54,7 +63,17 @@ the map background is blank. On a phone you see OpenTopoMap/OpenStreetMap.)*
 **For the organizer (and sweepers)**
 - Create an event, and you get a code like `K7MPQ-W3XZA`. Share it in the
   group chat.
+- Runners **join by scanning a QR code** on your phone at the start line.
+  They can also paste or type the code.
 - The route is **sent to everyone's phone automatically** when they join.
+- **Headcount.** You can see who is on the course, who has finished, who
+  dropped out safely, and who is unaccounted for. Unaccounted means they
+  closed the app without confirming they're safe, or have had no signal for
+  15 min. The app bar reads "12/15 in · 1 missing". A runner who leaves
+  early must tap *I'm safely off the course*. You can mark someone safe
+  yourself ("Picked up by car"), and sweepers see the same list. You get a
+  notification when everyone is accounted for, and an alert if a runner
+  falls behind the last sweeper.
 - **Multi-distance races.** Add one GPX per distance (e.g. 10 / 25 / 50 km).
   Runners choose theirs when joining, and the group list can be filtered by
   distance.
@@ -131,7 +150,8 @@ flutter build apk --release # Android APK
    distance. Tap a distance to set its start time, checkpoints and cut-offs →
    *Create event*. Share the code. Optionally add your phone number so runners can
    call or text you from the SOS screen.
-2. **Everyone else:** *Join a group run* → paste the code → enter your name →
+2. **Everyone else:** *Join a group run* → scan the organizer's QR code (or
+   paste the code) → enter your name →
    *Runner* or *Sweeper*. Pick your distance; the route appears
    automatically. Set your **Fuel plan** (home screen) before the start.
 3. **Before leaving coverage:** menu → *Save map for offline*.
@@ -139,7 +159,8 @@ flutter build apk --release # Android APK
    allow notifications. On Xiaomi, Huawei, Samsung and similar phones, also set
    **Battery → No restrictions** for IbexTrails, so tracking doesn't stop with
    the screen off.
-5. **After the run:** the organizer taps ✕ → *End event*. Anyone can export
+5. **After the run:** check the **Headcount** (tap the line under the event
+   name) until it says everyone is accounted for. Then tap ✕ → *End event*. Anyone can export
    their own track as GPX from the menu.
 
 Tip: do a short test loop around the block first. Walk 60–70 m off the route to
@@ -202,7 +223,8 @@ test/
 ```sh
 flutter analyze
 flutter test                                     # unit tests
-mosquitto -p 18830 -d                            # local broker
+mosquitto -p 18830 -d                            # local broker, or with Docker:
+# docker run -d --rm --name ibex-test-mqtt -p 18830:1883 eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
 IBEX_TEST_BROKER=127.0.0.1:18830 flutter test test/integration
 IBEX_TEST_BROKER=127.0.0.1:18830 IBEX_SCREENSHOTS=/tmp/shots \
   flutter test test/screenshots

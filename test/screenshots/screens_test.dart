@@ -29,6 +29,7 @@ import 'package:ibex_trails/services/settings.dart';
 import 'package:ibex_trails/state/run_session.dart';
 import 'package:ibex_trails/ui/course_editor_screen.dart';
 import 'package:ibex_trails/ui/course_picker.dart';
+import 'package:ibex_trails/ui/group_sheet.dart';
 import 'package:ibex_trails/ui/home_screen.dart';
 import 'package:ibex_trails/ui/run_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -272,6 +273,7 @@ void main() {
         north: -160,
       );
       await report('d', 'Laila', 1500, role: Role.sweeper);
+      await report('e', 'Hany', 900, status: RunnerStatus.left);
       await Future<void>.delayed(const Duration(seconds: 2));
       await sim.dispose();
     });
@@ -344,6 +346,35 @@ void main() {
     );
     await tester.pump(const Duration(seconds: 1));
     await _shot(tester, key, '9_course_editor');
+    Navigator.of(ctx).pop();
+    await tester.pump(const Duration(seconds: 1));
+
+    // Headcount, opened from the app bar.
+    unawaited(showGroupSheet(ctx, session, view: GroupView.headcount));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '10_headcount');
+    await tester.tapAt(const Offset(200, 60));
+    await tester.pump(const Duration(seconds: 1));
+
+    // Event code with QR.
+    await tester.tap(find.byTooltip('Share event code'));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '11_qr');
+    await tester.tap(find.text('Close'));
+    await tester.pump(const Duration(seconds: 1));
+
+    // Run on round the loop to just before its first real turn.
+    final turn = session.course!.turns.firstWhere((t) => t.along > 2500);
+    await tester.runAsync(() async {
+      for (var a = 2480.0; a <= turn.along - 50; a += 40) {
+        gps.add(_fix(shared.pointAt(a)));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    session.fuelReminder = null;
+    session.notifyListeners();
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '12_turn_warning');
 
     await tester.pumpWidget(const SizedBox());
     debugDisableShadows = true;

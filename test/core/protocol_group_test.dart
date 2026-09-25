@@ -15,12 +15,15 @@ PositionReport report(
   double? along,
   int? battery,
   List<TrailPoint> trail = const [],
+  Role role = Role.runner,
+  String? course,
+  bool safe = false,
 }) {
   final p = offset(north, east);
   return PositionReport(
     id: id,
     name: 'Runner $id',
-    role: Role.runner,
+    role: role,
     time: t,
     lat: p.lat,
     lon: p.lon,
@@ -28,6 +31,8 @@ PositionReport report(
     along: along,
     battery: battery,
     trail: trail,
+    course: course,
+    safe: safe,
   );
 }
 
@@ -313,5 +318,86 @@ void main() {
       'late',
     ]);
     expect(g.spread(course: 'c25')!.$1.id, 'slow');
+  });
+
+  test('safe flag and roster JSON round trip', () {
+    final left = report('a', t0, status: RunnerStatus.left, safe: true);
+    expect(PositionReport.fromJson(left.toJson())!.safe, isTrue);
+    expect(PositionReport.fromJson(report('b', t0).toJson())!.safe, isFalse);
+
+    final roster = Roster({'c': 'Picked up at CP2'}, t0);
+    final copy = Roster.fromJson(roster.toJson())!;
+    expect(copy.accountedFor, {'c': 'Picked up at CP2'});
+    expect(copy.updated, t0);
+    expect(Roster.fromJson({'t': 'pos'}), isNull);
+    const t = EventTopics('abc');
+    expect(t.roster, 'ibextrails/v1/abc/roster');
+  });
+
+  test('headcount sorts everyone into buckets', () {
+    final now = t0.add(const Duration(hours: 2));
+    final g = Group();
+    // Waiting at the start.
+    g.apply(report('start', now), now);
+    // Out on the course.
+    g.apply(report('out', t0, along: 3000), t0);
+    g.apply(report('out', now, east: 300, along: 5000), now);
+    // Finished.
+    g.apply(report('done', now, status: RunnerStatus.finished), now);
+    // Dropped out and confirmed safe.
+    g.apply(report('safe', now, status: RunnerStatus.left, safe: true), now);
+    // Closed the app without confirming.
+    g.apply(report('gone', now, status: RunnerStatus.left), now);
+    // Silent for 20 minutes.
+    final quiet = now.subtract(const Duration(minutes: 20));
+    g.apply(report('quiet', quiet, along: 4000), quiet);
+    // Silent, but the organizer ticked them off.
+    g.apply(report('car', quiet, along: 2000), quiet);
+    // The organizer's own phone.
+    g.apply(report('org', now), now);
+
+    final hc = g.headcount(now, accountedFor: {'car'}, exclude: 'org');
+    List<String> ids(List<Participant> ps) => [for (final p in ps) p.id];
+    expect(ids(hc.notStarted), ['start']);
+    expect(ids(hc.onCourse), ['out']);
+    expect(ids(hc.finished), ['done']);
+    expect(ids(hc.safeOut).toSet(), {'safe', 'car'});
+    expect(ids(hc.unaccounted).toSet(), {'gone', 'quiet'});
+    expect(hc.total, 7);
+    expect(hc.accountedFor, 3);
+    expect(hc.allIn, isFalse);
+
+    final home = Group()
+      ..apply(report('a', now, status: RunnerStatus.finished), now)
+      ..apply(report('b', now, status: RunnerStatus.left, safe: true), now);
+    expect(home.headcount(now).allIn, isTrue);
+    expect(Group().headcount(now).allIn, isFalse);
+  });
+
+  test('alerts: left without confirming, and behind the sweeper', () {
+    final now = t0.add(const Duration(hours: 1));
+    final g = Group()
+      ..apply(
+        report('sweep', now, role: Role.sweeper, along: 4000, course: 'c1'),
+        now,
+      )
+      ..apply(report('slow', now, along: 3850, course: 'c1'), now)
+      ..apply(report('lost', now, along: 3000, course: 'c1'), now)
+      ..apply(report('other', now, along: 1000, course: 'c2'), now)
+      ..apply(report('gone', now, status: RunnerStatus.left), now)
+      ..apply(report('fine', now, status: RunnerStatus.left, safe: true), now);
+    final keys = {for (final a in g.alerts(now, const AlertPolicy())) a.key};
+    expect(keys, {'lost/behindSweeper/', 'gone/leftUnconfirmed/'});
+
+    // Ticked off by the organizer: no more alerts for them.
+    final ticked = {
+      for (final a in g.alerts(
+        now,
+        const AlertPolicy(),
+        accountedFor: {'gone', 'lost'},
+      ))
+        a.key,
+    };
+    expect(ticked, isEmpty);
   });
 }

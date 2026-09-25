@@ -8,6 +8,7 @@ import '../app.dart';
 import '../brand.dart';
 import '../core/geo.dart';
 import '../core/route.dart';
+import '../core/turns.dart';
 import '../services/map_tiles.dart';
 import '../services/settings.dart';
 import '../state/run_session.dart';
@@ -196,6 +197,46 @@ class _TrailMapState extends State<TrailMap> {
       layers.add(
         MarkerLayer(markers: _directionArrows(route, TrailColors.route)),
       );
+      // Only the turns that are easy to miss, to keep the map readable.
+      final turns = [
+        for (final t in s.course?.turns ?? const <Turn>[])
+          if (t.kind == TurnKind.sharp || t.kind == TurnKind.uTurn) t,
+      ];
+      if (turns.isNotEmpty) {
+        layers.add(
+          MarkerLayer(
+            markers: [
+              for (final t in turns)
+                Marker(
+                  point: ll(route.pointAt(t.along)),
+                  width: 26,
+                  height: 26,
+                  child: Tooltip(
+                    message: t.label,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Brand.night, width: 2),
+                      ),
+                      child: Icon(
+                        t.kind == TurnKind.uTurn
+                            ? (t.isRight
+                                  ? Icons.u_turn_right
+                                  : Icons.u_turn_left)
+                            : (t.isRight
+                                  ? Icons.turn_sharp_right
+                                  : Icons.turn_sharp_left),
+                        size: 16,
+                        color: Brand.night,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      }
     }
 
     // Highlighted trail of a selected participant.

@@ -5,6 +5,7 @@ import '../app.dart';
 import '../core/event_code.dart';
 import '../core/protocol.dart';
 import '../state/run_session.dart';
+import 'qr_scan_screen.dart';
 import 'run_screen.dart';
 
 class JoinScreen extends StatefulWidget {
@@ -32,21 +33,21 @@ class _JoinScreenState extends State<JoinScreen> {
 
   Future<void> _paste() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text ?? '';
     // Find a code anywhere in a pasted invitation message.
-    final match = RegExp(r'[A-Za-z2-9]{5}-?[A-Za-z2-9]{5}').allMatches(text);
-    for (final m in match) {
-      final code = normalizeEventCode(m.group(0)!);
-      if (code != null) {
-        _code.text = formatEventCode(code);
-        return;
-      }
-    }
-    if (mounted) {
+    final code = findEventCode(data?.text ?? '');
+    if (code != null) {
+      _code.text = formatEventCode(code);
+    } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No event code found on the clipboard')),
       );
     }
+  }
+
+  Future<void> _scan() async {
+    final code = await Navigator.of(context)
+        .push<String>(MaterialPageRoute(builder: (_) => const QrScanScreen()));
+    if (code != null) setState(() => _code.text = formatEventCode(code));
   }
 
   Future<void> _join() async {
@@ -91,10 +92,20 @@ class _JoinScreenState extends State<JoinScreen> {
                 labelText: 'Event code',
                 hintText: 'ABCDE-FGHJK',
                 prefixIcon: const Icon(Icons.key_outlined),
-                suffixIcon: IconButton(
-                  tooltip: 'Paste',
-                  icon: const Icon(Icons.content_paste),
-                  onPressed: _paste,
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'Scan QR code',
+                      icon: const Icon(Icons.qr_code_scanner),
+                      onPressed: _scan,
+                    ),
+                    IconButton(
+                      tooltip: 'Paste',
+                      icon: const Icon(Icons.content_paste),
+                      onPressed: _paste,
+                    ),
+                  ],
                 ),
               ),
               textCapitalization: TextCapitalization.characters,

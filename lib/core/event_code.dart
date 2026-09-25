@@ -27,6 +27,17 @@ String? normalizeEventCode(String input) {
   return cleaned;
 }
 
+/// Finds an event code anywhere in [text], such as a pasted invitation or a
+/// scanned QR code. Returns it normalized, or null if there is none.
+String? findEventCode(String text) {
+  final candidates = RegExp(r'[A-Za-z2-9]{5}-?[A-Za-z2-9]{5}');
+  for (final m in candidates.allMatches(text)) {
+    final code = normalizeEventCode(m.group(0)!);
+    if (code != null) return code;
+  }
+  return null;
+}
+
 /// `K7MPQW3XZA` -> `K7MPQ-W3XZA`.
 String formatEventCode(String normalized) {
   final half = normalized.length ~/ 2;

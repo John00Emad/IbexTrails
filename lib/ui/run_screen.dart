@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -13,6 +14,8 @@ import '../core/checkpoints.dart';
 import '../core/course.dart';
 import '../core/geo.dart';
 import '../core/group.dart';
+import '../core/protocol.dart';
+import '../core/turns.dart';
 import '../services/location_service.dart';
 import '../services/map_tiles.dart';
 import '../services/relay_client.dart';
@@ -141,23 +144,48 @@ class _RunScreenState extends State<RunScreen> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        icon: const Icon(Icons.key),
         title: const Text('Event code'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SelectableText(
-              s.displayCode,
-              style: Theme.of(context).textTheme.headlineMedium
-                  ?.copyWith(letterSpacing: 3, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Share this code with your group. Anyone with the '
-              'code can join and see positions, so share it only with '
-              'participants.',
-            ),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Runners scan this at the start line; a normal camera app
+              // shows the readable invitation.
+              // Fixed size: the dialog measures its content's intrinsic
+              // width, which the QR widget can't report.
+              Container(
+                width: 216,
+                height: 216,
+                padding: const EdgeInsets.all(8),
+                color: Colors.white,
+                child: QrImageView(
+                  data: _invite,
+                  size: 200,
+                  backgroundColor: Colors.white,
+                  eyeStyle: const QrEyeStyle(
+                    eyeShape: QrEyeShape.square,
+                    color: Brand.night,
+                  ),
+                  dataModuleStyle: const QrDataModuleStyle(
+                    dataModuleShape: QrDataModuleShape.square,
+                    color: Brand.night,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SelectableText(
+                s.displayCode,
+                style: Theme.of(context).textTheme.headlineMedium
+                    ?.copyWith(letterSpacing: 3, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Runners scan the QR code or type the code. Anyone with '
+                'it can join and see positions, so share it only with '
+                'participants.',
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -178,8 +206,8 @@ class _RunScreenState extends State<RunScreen> {
     );
   }
 
-  Future<void> _openGroup() async {
-    final id = await showGroupSheet(context, s);
+  Future<void> _openGroup({GroupView view = GroupView.runners}) async {
+    final id = await showGroupSheet(context, s, view: view);
     if (id == null || !mounted) return;
     final p = s.group[id];
     if (p == null) return;
@@ -302,6 +330,41 @@ class _RunScreenState extends State<RunScreen> {
   }
 
   Future<void> _leave() async {
+    // A runner still out on the course must confirm they're safe, so the
+    // organizer's headcount stays right.
+    final dropping =
+        s.isEvent && !s.isOrganizer && s.status != RunnerStatus.finished;
+    if (dropping) {
+      final safe = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          icon: const Icon(Icons.verified_user),
+          title: const Text('Leaving before the finish?'),
+          content: const Text(
+            'Only leave once you are safely off the course (back at the '
+            'car, at an aid station, with a marshal...). The organizer is '
+            'told that you are safe and stops tracking you.\n\n'
+            'Still out on the trail? Stay in the run, or use SOS if you '
+            'need help.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Stay in the run'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('I\'m safely off the course'),
+            ),
+          ],
+        ),
+      );
+      if (safe != true) return;
+      await s.leave(safe: true);
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
     final endAll = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -311,7 +374,7 @@ class _RunScreenState extends State<RunScreen> {
               ? 'Ending the event removes the route and everyone\'s positions '
                     'from the relay. Leaving keeps it running for the others.'
               : s.isEvent
-              ? 'The group will see that you left.'
+              ? 'You finished. The group will see that you left.'
               : 'Your recorded track can be saved from the menu first.',
         ),
         actions: [
@@ -434,7 +497,14 @@ class _RunScreenState extends State<RunScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(title, overflow: TextOverflow.ellipsis),
-          if (s.isEvent) _ConnectionLine(session: s),
+          if (s.isEvent)
+            GestureDetector(
+              // Organizer and sweepers: tap for the headcount.
+              onTap: s.watchesGroup
+                  ? () => _openGroup(view: GroupView.headcount)
+                  : null,
+              child: _ConnectionLine(session: s),
+            ),
         ],
       ),
       leading: IconButton(
@@ -752,6 +822,16 @@ class _RunScreenState extends State<RunScreen> {
   }
 }
 
+/// "12/15 in", or null before anyone has joined.
+String? _headcountLabel(RunSession s) {
+  final hc = s.headcount();
+  if (hc.total == 0) return null;
+  final missing = hc.unaccounted.isEmpty
+      ? ''
+      : ' · ${hc.unaccounted.length} missing';
+  return '${hc.accountedFor}/${hc.total} in$missing';
+}
+
 class _ConnectionLine extends StatelessWidget {
   const _ConnectionLine({required this.session});
   final RunSession session;
@@ -775,7 +855,14 @@ class _ConnectionLine extends StatelessWidget {
             const SizedBox(width: 4),
             Flexible(
               child: Text(
-                '$text · ${session.displayCode}',
+                // Organizer and sweepers need the headcount more than the
+                // code (which is behind the share button).
+                [
+                  text,
+                  session.watchesGroup
+                      ? _headcountLabel(session) ?? session.displayCode
+                      : session.displayCode,
+                ].join(' · '),
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.bodySmall
                     ?.copyWith(color: Colors.white70, letterSpacing: 0.5),
@@ -942,7 +1029,10 @@ class _StatsPanel extends StatelessWidget {
     }
 
     final outlook = s.outlook;
-    final next = (route != null && m != null && outlook == null)
+    // Plain GPX waypoints only when the course has no checkpoints (those
+    // come from the same waypoints and are tracked properly).
+    final hasCheckpoints = s.course?.checkpoints.isNotEmpty ?? false;
+    final next = (route != null && m != null && !hasCheckpoints)
         ? route.nextWaypoint(m.along)
         : null;
     final others = <ProfileMarker>[
@@ -966,6 +1056,8 @@ class _StatsPanel extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Row(children: [for (final t in tiles) Expanded(child: t)]),
+              if (s.nextTurn != null && s.nextTurn!.distance <= 1000)
+                _TurnLine(next: s.nextTurn!),
               if (outlook != null) _CheckpointLine(outlook: outlook),
               if (next != null)
                 Padding(
@@ -1047,6 +1139,63 @@ class _Stat extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// "Sharp left · 120 m" with an arrow turned the way to go.
+class _TurnLine extends StatelessWidget {
+  const _TurnLine({required this.next});
+  final UpcomingTurn next;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = next.turn;
+    final close = next.distance <= 100;
+    final icon = switch (t.kind) {
+      TurnKind.uTurn => t.isRight ? Icons.u_turn_right : Icons.u_turn_left,
+      TurnKind.switchbacks => Icons.moving,
+      _ => Icons.arrow_upward,
+    };
+    // Straight up = ahead; rotate by the turn angle (clamped for sharp).
+    final angle = switch (t.kind) {
+      TurnKind.uTurn || TurnKind.switchbacks => 0.0,
+      _ => t.change.clamp(-150.0, 150.0) * math.pi / 180,
+    };
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: close ? Brand.ember : Brand.night,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Transform.rotate(
+              angle: angle,
+              child: Icon(icon, size: 20, color: Colors.white),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: t.label,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  TextSpan(text: ' · ${formatDistance(next.distance)}'),
+                ],
+              ),
+              style: Theme.of(context).textTheme.bodyLarge,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

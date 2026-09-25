@@ -18,7 +18,17 @@ class ParticipantStyle {
       case RunnerStatus.sos:
         return const ParticipantStyle(TrailColors.danger, 'SOS', Icons.sos);
       case RunnerStatus.left:
-        return const ParticipantStyle(Colors.grey, 'Left', Icons.logout);
+        return r.safe
+            ? const ParticipantStyle(
+                Colors.blueGrey,
+                'Safely out',
+                Icons.verified_user,
+              )
+            : const ParticipantStyle(
+                TrailColors.danger,
+                'Left, unconfirmed',
+                Icons.person_off,
+              );
       case RunnerStatus.finished:
         return const ParticipantStyle(
           Colors.blueGrey,

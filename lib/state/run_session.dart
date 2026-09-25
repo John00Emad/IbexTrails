@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding;
 import 'package:geolocator/geolocator.dart';
 
 import '../core/checkpoints.dart';
@@ -19,11 +20,13 @@ import '../core/group.dart';
 import '../core/protocol.dart';
 import '../core/route.dart';
 import '../core/route_matcher.dart';
+import '../core/turns.dart';
 import '../services/location_service.dart';
 import '../services/notifications.dart';
 import '../services/relay_client.dart';
 import '../services/route_library.dart';
 import '../services/settings.dart';
+import '../services/voice.dart';
 
 /// One run: navigation along an optional route, plus (in a group event)
 /// sharing your position and seeing everyone else's.
@@ -87,6 +90,20 @@ class RunSession extends ChangeNotifier {
   CheckpointOutlook? outlook;
   final Set<String> _riskNotified = {};
   final Set<String> _missedNotified = {};
+
+  // ---- Turn warnings -----------------------------------------------------
+  /// The next turn ahead while following the route.
+  UpcomingTurn? nextTurn;
+  final Set<int> _turnWarned = {};
+  final Set<int> _turnBuzzed = {};
+  late final Voice? _voice = locationSource == null ? Voice() : null;
+
+  // ---- Headcount -----------------------------------------------------------
+  /// People the organizer ticked off as safe, with a note.
+  Map<String, String> accountedFor = {};
+  DateTime? _rosterUpdated;
+  bool _rosterDirty = false;
+  bool _allInNotified = false;
 
   // ---- Fuelling (private to this device) ---------------------------------
   FuelCoach? fuel;
@@ -300,6 +317,7 @@ class RunSession extends ChangeNotifier {
       match = matcher.update(here, accuracy: p.accuracy);
       _reactToMatch(before, match!);
       _updateCheckpoints(match!, here, DateTime.now());
+      _updateTurnCue(match!);
     }
 
     if (prevFix == null && isEvent) _publishReport();
@@ -389,6 +407,41 @@ class RunSession extends ChangeNotifier {
               '${_minutes(-o.margin!)} after the ${_clock(o.cutoff!)} cut-off.',
         );
       }
+    }
+  }
+
+  /// Warns [AppSettings.turnWarnMeters] before each turn (vibration, voice,
+  /// and a notification when the screen is off), and buzzes again right at
+  /// the turn. Quiet while off route: the off-route alarm takes over.
+  void _updateTurnCue(RouteMatch m) {
+    final c = course;
+    if (c == null ||
+        !settings.turnWarnings ||
+        m.offRoute ||
+        m.wrongWay ||
+        m.finished) {
+      nextTurn = null;
+      return;
+    }
+    final next = findNextTurn(c.turns, m.along);
+    nextTurn = next;
+    if (next == null) return;
+    final t = next.turn;
+    if (next.distance <= settings.turnWarnMeters && _turnWarned.add(t.id)) {
+      HapticFeedback.heavyImpact();
+      if (settings.voiceCues) _voice?.say(t.spoken(next.distance));
+      final inBackground =
+          WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+      if (inBackground) {
+        notifier.info(
+          NoteId.turn,
+          t.label,
+          'In ${formatDistance(next.distance)}',
+        );
+      }
+    }
+    if (next.distance <= 15 && _turnBuzzed.add(t.id)) {
+      HapticFeedback.heavyImpact();
     }
   }
 
@@ -494,6 +547,11 @@ class RunSession extends ChangeNotifier {
     }
     checkpoints = tracker;
     outlook = null;
+    if (!sameRoute) {
+      nextTurn = null;
+      _turnWarned.clear();
+      _turnBuzzed.clear();
+    }
   }
 
   /// Picks the course automatically when there is no real choice, or the
@@ -725,6 +783,14 @@ class RunSession extends ChangeNotifier {
         _dirtyCourses.remove(id);
       }
     }
+    if (_rosterDirty && _rosterUpdated != null) {
+      final roster = await _cipher!.seal(
+        Roster(accountedFor, _rosterUpdated!).toJson(),
+      );
+      if (r.publish(topics!.roster, roster, retain: true, reliable: true)) {
+        _rosterDirty = false;
+      }
+    }
     if (!_eventInfoDirty) return;
     final payload = await _cipher!.seal(info.toJson());
     if (r.publish(topics!.event, payload, retain: true, reliable: true)) {
@@ -827,6 +893,19 @@ class RunSession extends ChangeNotifier {
       return;
     }
 
+    if (m.topic == t.roster) {
+      final roster = m.payload.isEmpty
+          ? null
+          : Roster.fromJson(await cipher.open(m.payload));
+      if (roster == null) return;
+      final prev = _rosterUpdated;
+      if (prev != null && !roster.updated.isAfter(prev)) return;
+      accountedFor = Map.of(roster.accountedFor);
+      _rosterUpdated = roster.updated;
+      _evaluateAlerts();
+      return;
+    }
+
     if (m.topic == t.announcement) {
       if (m.payload.isEmpty) return;
       final a = Announcement.fromJson(await cipher.open(m.payload));
@@ -854,12 +933,56 @@ class RunSession extends ChangeNotifier {
     }
   }
 
+  /// Where everyone is (optionally on one [courseId]), leaving out the
+  /// organizer's own phone.
+  Headcount headcount({String? courseId}) => group.headcount(
+    DateTime.now(),
+    course: courseId,
+    accountedFor: accountedFor.keys.toSet(),
+    exclude: isOrganizer ? myId : null,
+    policy: alertPolicy,
+  );
+
+  /// Organizer: confirm someone is safely off the course (or undo it with
+  /// [note] null). Shared with sweepers.
+  void markAccountedFor(String id, String? note) {
+    if (!isOrganizer) return;
+    if (note == null) {
+      accountedFor.remove(id);
+    } else {
+      accountedFor[id] = note;
+    }
+    _rosterUpdated = DateTime.now();
+    _rosterDirty = true;
+    _flushEventInfo();
+    _evaluateAlerts();
+  }
+
   void _evaluateAlerts() {
+    final now = DateTime.now();
     final all = group
-        .alerts(DateTime.now(), alertPolicy, courseOf: (id) => courses[id])
+        .alerts(
+          now,
+          alertPolicy,
+          courseOf: (id) => courses[id],
+          accountedFor: accountedFor.keys.toSet(),
+        )
         .where((a) => a.participant.id != myId)
         .toList();
     alerts = all;
+    if (watchesGroup) {
+      final hc = headcount();
+      if (hc.allIn && !_allInNotified && hc.total > 0) {
+        _allInNotified = true;
+        notifier.info(
+          NoteId.allIn,
+          'Everyone is accounted for',
+          '${hc.finished.length} finished, ${hc.safeOut.length} safely out.',
+        );
+      } else if (!hc.allIn) {
+        _allInNotified = false;
+      }
+    }
     if (watchesGroup) {
       for (final a in _latch.newlyRaised(all)) {
         notifier.alert(
@@ -928,13 +1051,15 @@ class RunSession extends ChangeNotifier {
   }
 
   /// Leave the run. The organizer can also [endEvent], which clears the
-  /// event's data from the relay.
-  Future<void> leave({bool endEvent = false}) async {
+  /// event's data from the relay. [safe] tells the organizer the runner is
+  /// safely off the course, so they are counted as accounted for.
+  Future<void> leave({bool endEvent = false, bool safe = false}) async {
     final r = relay;
     if (r != null && r.isOnline) {
       if (endEvent && isOrganizer) {
         r.clearRetained(topics!.event);
         r.clearRetained(topics!.announcement);
+        r.clearRetained(topics!.roster);
         for (final id in courses.keys) {
           r.clearRetained(topics!.course(id));
         }
@@ -951,8 +1076,14 @@ class RunSession extends ChangeNotifier {
           time: DateTime.now(),
           lat: f.latitude,
           lon: f.longitude,
-          status: RunnerStatus.left,
+          // A finisher closing the app stays "finished" in the headcount.
+          status: status == RunnerStatus.finished
+              ? RunnerStatus.finished
+              : RunnerStatus.left,
           along: match?.along,
+          course: course?.id == _localCourse ? null : course?.id,
+          passes: checkpoints?.passed ?? const {},
+          safe: safe,
         );
         r.publish(
           topics!.position(myId),
@@ -985,6 +1116,7 @@ class RunSession extends ChangeNotifier {
     _reportTimer?.cancel();
     _alertTimer?.cancel();
     _tick?.cancel();
+    _voice?.dispose();
     notifier.onAction = null;
     relay?.state.removeListener(_onRelayState);
     relay?.dispose();

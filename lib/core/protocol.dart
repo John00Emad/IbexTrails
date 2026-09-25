@@ -18,6 +18,9 @@ class EventTopics {
   /// small enough for public brokers.
   String course(String courseId) => '$base/course/$courseId';
 
+  /// Who the organizer has ticked off as safe (retained).
+  String get roster => '$base/roster';
+
   /// Returns the participant id if [topic] is a position topic of this event.
   String? participantOf(String topic) => _suffix(topic, '$base/pos/');
 
@@ -86,6 +89,7 @@ class PositionReport {
     this.next,
     this.eta,
     this.started,
+    this.safe = false,
   });
 
   final String id;
@@ -127,6 +131,10 @@ class PositionReport {
   /// When this runner started, for cut-offs on runs without a set start.
   final DateTime? started;
 
+  /// With status `left`: the runner confirmed they are safely off the
+  /// course (not just that the app was closed).
+  final bool safe;
+
   GeoPoint get point => GeoPoint(lat, lon, elevation);
 
   Map<String, Object?> toJson() => {
@@ -162,6 +170,7 @@ class PositionReport {
     if (next != null) 'nx': next,
     if (eta != null) 'eta': eta!.millisecondsSinceEpoch ~/ 1000,
     if (started != null) 'st': started!.millisecondsSinceEpoch ~/ 1000,
+    if (safe) 'sf': 1,
   };
 
   static PositionReport? fromJson(Object? json) {
@@ -200,6 +209,7 @@ class PositionReport {
         next: json['nx'] as String?,
         eta: _fromSeconds(json['eta']),
         started: _fromSeconds(json['st']),
+        safe: json['sf'] == 1,
       );
     } on Object {
       return null;
@@ -289,6 +299,35 @@ class CourseUpdate {
     try {
       return CourseUpdate(
         Course.fromShareJson(json),
+        DateTime.fromMillisecondsSinceEpoch((json['u'] as num).toInt()),
+      );
+    } on Object {
+      return null;
+    }
+  }
+}
+
+/// People the organizer has confirmed are safe off the course (picked up by
+/// car, turned back at the start...), shared so sweepers see the same
+/// headcount.
+class Roster {
+  const Roster(this.accountedFor, this.updated);
+
+  /// Participant id -> note ("Picked up at CP2").
+  final Map<String, String> accountedFor;
+  final DateTime updated;
+
+  Map<String, Object?> toJson() => {
+    't': 'roster',
+    'u': updated.millisecondsSinceEpoch,
+    'a': accountedFor,
+  };
+
+  static Roster? fromJson(Object? json) {
+    if (json is! Map || json['t'] != 'roster') return null;
+    try {
+      return Roster(
+        (json['a'] as Map).cast<String, String>(),
         DateTime.fromMillisecondsSinceEpoch((json['u'] as num).toInt()),
       );
     } on Object {

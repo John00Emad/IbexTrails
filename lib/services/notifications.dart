@@ -207,6 +207,8 @@ abstract final class NoteId {
   static const fuel = 6;
   static const checkpoint = 7;
   static const cutoff = 8;
+  static const turn = 9;
+  static const allIn = 10;
 
   /// Group alerts get ids derived from participant + kind.
   static int group(String key) => 1000 + (key.hashCode & 0x3fffffff) % 100000;
