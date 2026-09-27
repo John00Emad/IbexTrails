@@ -39,8 +39,7 @@ class RunSession extends ChangeNotifier {
     this.locationSource,
     this.startedAt,
   }) {
-    notifier.onAction = (action, payload) =>
-        handleNotificationAction(action, payload, DateTime.now());
+    notifier.onAction = handleNotificationAction;
   }
 
   /// Replaces the device GPS, for tests and simulations.
@@ -679,10 +678,12 @@ class RunSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Handles a notification button ("Ate it", "In 5 min").
+  /// Handles a notification button ("Ate it", "In 5 min") tapped at [at].
+  /// Taps from before this run started (queued while the app was closed)
+  /// are ignored.
   void handleNotificationAction(String? action, String? payload, DateTime at) {
     final f = fuel;
-    if (f == null) return;
+    if (f == null || _disposed || at.isBefore(f.start)) return;
     if (action == NoteAction.fuelSnooze) {
       f.snooze(at, const Duration(minutes: 5));
       fuelReminder = null;

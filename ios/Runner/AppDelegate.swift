@@ -1,5 +1,7 @@
 import Flutter
 import UIKit
+// Needed for FlutterLocalNotificationsPlugin.setPluginRegistrantCallback.
+import flutter_local_notifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -11,6 +13,11 @@ import UIKit
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    // Notification buttons ("Ate it", "In 5 min") run in a background
+    // engine; this gives it the plugins it needs.
+    FlutterLocalNotificationsPlugin.setPluginRegistrantCallback { registry in
+      GeneratedPluginRegistrant.register(with: registry)
+    }
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
   }
 }

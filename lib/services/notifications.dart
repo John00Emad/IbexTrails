@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -15,21 +16,45 @@ abstract final class NoteAction {
   static const fuelCategory = 'fuel';
 }
 
-/// Runs in a background isolate when a notification button is tapped
-/// without opening the app (e.g. "Ate it" on the lock screen). Stores the
-/// action; the running session picks it up within seconds.
+/// Name under which the running app listens for notification actions.
+const actionPortName = 'ibextrails_notification_actions';
+
+/// Runs in a separate background isolate when a notification button is
+/// tapped without opening the app (e.g. "Ate it" on the lock screen).
+///
+/// If the app is running (it usually is during a run, kept alive by the
+/// location service), the action goes straight to it. Otherwise it is
+/// queued in SharedPreferences for the next session to pick up.
 @pragma('vm:entry-point')
-Future<void> onBackgroundNotificationAction(NotificationResponse r) async {
-  DartPluginRegistrant.ensureInitialized();
+Future<void> onBackgroundNotificationAction(NotificationResponse r) =>
+    deliverNotificationAction(
+      r.actionId,
+      r.payload,
+      DateTime.now(),
+      registerPlugins: true,
+    );
+
+@visibleForTesting
+Future<void> deliverNotificationAction(
+  String? actionId,
+  String? payload,
+  DateTime at, {
+  bool registerPlugins = false,
+}) async {
+  final message = <String, Object?>{
+    'a': actionId,
+    'p': payload,
+    't': at.millisecondsSinceEpoch,
+  };
+  final port = IsolateNameServer.lookupPortByName(actionPortName);
+  if (port != null) {
+    port.send(message);
+    return;
+  }
+  if (registerPlugins) DartPluginRegistrant.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
   final list = prefs.getStringList(pendingActionsKey) ?? <String>[];
-  list.add(
-    jsonEncode({
-      'a': r.actionId,
-      'p': r.payload,
-      't': DateTime.now().millisecondsSinceEpoch,
-    }),
-  );
+  list.add(jsonEncode(message));
   await prefs.setStringList(pendingActionsKey, list);
 }
 
@@ -39,9 +64,29 @@ class Notifier {
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _ready = false;
 
-  /// Receives notification actions tapped while the app is in the
-  /// foreground. Set by the active run.
-  void Function(String? actionId, String? payload)? onAction;
+  /// Receives notification actions (button taps) while the app is
+  /// running. Set by the active run.
+  void Function(String? actionId, String? payload, DateTime at)? onAction;
+
+  ReceivePort? _actionPort;
+
+  /// Lets the background isolate that handles button taps hand them to
+  /// this (UI) isolate directly.
+  void listenForActions() {
+    if (_actionPort != null) return;
+    final port = ReceivePort();
+    IsolateNameServer.removePortNameMapping(actionPortName);
+    IsolateNameServer.registerPortWithName(port.sendPort, actionPortName);
+    port.listen((message) {
+      if (message is! Map) return;
+      onAction?.call(
+        message['a'] as String?,
+        message['p'] as String?,
+        DateTime.fromMillisecondsSinceEpoch(message['t'] as int),
+      );
+    });
+    _actionPort = port;
+  }
 
   static const _alertChannel = AndroidNotificationDetails(
     'alerts',
@@ -64,6 +109,7 @@ class Notifier {
 
   Future<void> init() async {
     if (kIsWeb) return;
+    listenForActions();
     try {
       await _plugin.initialize(
         settings: InitializationSettings(
@@ -87,7 +133,7 @@ class Notifier {
           ),
         ),
         onDidReceiveNotificationResponse: (r) =>
-            onAction?.call(r.actionId, r.payload),
+            onAction?.call(r.actionId, r.payload, DateTime.now()),
         onDidReceiveBackgroundNotificationResponse:
             onBackgroundNotificationAction,
       );
