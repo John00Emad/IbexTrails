@@ -23,6 +23,7 @@ import 'package:ibex_trails/core/geo.dart';
 import 'package:ibex_trails/core/gpx.dart';
 import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/core/route.dart';
+import 'package:ibex_trails/services/map_layers.dart';
 import 'package:ibex_trails/services/notifications.dart';
 import 'package:ibex_trails/services/relay_client.dart';
 import 'package:ibex_trails/services/settings.dart';
@@ -31,6 +32,7 @@ import 'package:ibex_trails/ui/course_editor_screen.dart';
 import 'package:ibex_trails/ui/course_picker.dart';
 import 'package:ibex_trails/ui/group_sheet.dart';
 import 'package:ibex_trails/ui/home_screen.dart';
+import 'package:ibex_trails/ui/layers_sheet.dart';
 import 'package:ibex_trails/ui/run_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -375,6 +377,14 @@ void main() {
     session.notifyListeners();
     await tester.pump(const Duration(seconds: 1));
     await _shot(tester, key, '12_turn_warning');
+
+    // Map layers, with hillshade on the topo map.
+    settings.mapSetup = const MapSetup(overlays: {'hillshade': 0.4});
+    unawaited(showLayersSheet(ctx, settings));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '13_layers');
+    await tester.tapAt(const Offset(200, 60));
+    await tester.pump(const Duration(seconds: 1));
 
     await tester.pumpWidget(const SizedBox());
     debugDisableShadows = true;

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../services/settings.dart';
 import 'fuel_plan_screen.dart';
+import 'layers_sheet.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -124,16 +125,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               value: s.keepScreenOn,
               onChanged: (v) => s.keepScreenOn = v,
             ),
-            for (final m in MapStyle.values)
-              ListTile(
-                leading: Icon(
-                  m == s.mapStyle
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked,
-                ),
-                title: Text(m.label),
-                onTap: () => s.mapStyle = m,
-              ),
+            ListTile(
+              leading: const Icon(Icons.layers_outlined),
+              title: const Text('Map layers'),
+              subtitle: Text(describeMapSetup(s)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => showLayersSheet(context, s),
+            ),
             _Section('Fuelling'),
             ListTile(
               leading: const Icon(Icons.bolt),
@@ -235,8 +233,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 'IbexTrails is free and has no accounts. Group positions go '
                 'through a public MQTT relay, encrypted with a key derived '
                 'from the event code, so only people with the code can read '
-                'them. Maps © OpenStreetMap contributors; topo style © '
-                'OpenTopoMap.',
+                'them. Map credits for the layers in use are shown on the '
+                'map. 3D view: MapLibre GL JS and maplibre-contour (BSD).',
                 style: theme.textTheme.bodySmall,
               ),
             ),

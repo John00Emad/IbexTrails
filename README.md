@@ -16,12 +16,12 @@ built with Flutter.
 |---|---|---|
 | ![Checkpoint line and fuel reminder](docs/screenshots/6_run_checkpoint_fuel.png) | ![Fuel sheet](docs/screenshots/7_fuel_sheet.png) | ![Course picker](docs/screenshots/8_course_picker.png) |
 
-| Turn warning | Headcount | Join by QR |
-|---|---|---|
-| ![Turn warning](docs/screenshots/12_turn_warning.png) | ![Headcount](docs/screenshots/10_headcount.png) | ![QR code](docs/screenshots/11_qr.png) |
+| Turn warning | Headcount | Join by QR | Map layers |
+|---|---|---|---|
+| ![Turn warning](docs/screenshots/12_turn_warning.png) | ![Headcount](docs/screenshots/10_headcount.png) | ![QR code](docs/screenshots/11_qr.png) | ![Map layers](docs/screenshots/13_layers.png) |
 
 *(Screens rendered in the test harness, where map tiles are not downloaded, so
-the map background is blank. On a phone you see OpenTopoMap/OpenStreetMap.)*
+the map background is blank. On a phone you see the map layers you picked.)*
 
 ## What it does
 
@@ -43,6 +43,12 @@ the map background is blank. On a phone you see OpenTopoMap/OpenStreetMap.)*
   ("Water in 2.3 km"), and an elevation profile with your position on it.
 - **Works without mobile data.** The route and navigation run entirely on the
   phone. Use **Save map for offline** before you leave coverage.
+- **Map layers and 3D terrain.** Pick a base map (topo, streets or satellite)
+  and add overlays like hillshade, contour lines, hiking trails and place
+  names, each with its own opacity. **Satellite Topo** puts them together in a
+  tiltable **3D** view of the mountains and wadis. Everything is free out of
+  the box; if you want MapTiler, Thunderforest or Mapbox maps, add your own key
+  and that provider bills you directly. IbexTrails takes nothing.
 - **Checkpoints and cut-offs.** Shows the next checkpoint, your projected
   arrival and how much time you have before its cut-off ("+23 min"). It warns
   you when your pace puts you behind a cut-off. Arrival times use
@@ -109,7 +115,9 @@ the map background is blank. On a phone you see OpenTopoMap/OpenStreetMap.)*
   are sent immediately. If a runner loses signal, the points recorded
   meanwhile are sent when they reconnect, so the organizer still sees the path
   they took.
-- Map tiles come from OpenTopoMap/OpenStreetMap and are cached on the phone.
+- Map tiles are cached on the phone. The free layers come from OpenTopoMap,
+  OpenStreetMap, Esri, EOX (Sentinel-2) and Waymarked Trails; elevation for
+  3D, hillshade and contours from the AWS Terrain Tiles open dataset.
 
 ## Getting the app
 
@@ -177,7 +185,11 @@ feel the alarm.
 - Anyone who has the event code can see the group's positions, so share it
   only with participants. Each run gets a new code.
 - Tile servers are volunteer-run. Offline saving is limited to a narrow
-  corridor along the route, as their usage policies ask.
+  corridor along the route, as their usage policies ask. Some providers
+  (OpenStreetMap, Esri, Waymarked Trails, Thunderforest, Mapbox) don't allow
+  downloading ahead at all, so those layers work offline only where you have
+  already looked at them. OpenTopoMap, Sentinel-2, MapTiler and the elevation
+  for 3D can be saved.
 
 ## Branding
 
@@ -211,9 +223,13 @@ Fonts: [Cairo](https://github.com/Gue3bara/Cairo) (SIL Open Font License,
 lib/
   core/        pure Dart: GPX parsing, route model, route matching,
                encryption, wire protocol, group/alert logic
-  services/    GPS, MQTT relay, notifications, map tiles, settings, storage
+  services/    GPS, MQTT relay, notifications, map layers and tiles,
+               settings, storage
   state/       RunSession: ties navigation + group tracking together
   ui/          screens and widgets
+assets/map3d/  3D terrain page: MapLibre GL JS + maplibre-contour (vendored,
+               BSD), shown in a web view and fed by a small tile server in
+               the app (lib/services/tile_proxy.dart)
 test/
   core/        unit tests
   integration/ end-to-end group run over a real MQTT broker
@@ -242,4 +258,7 @@ Bluetooth/LoRa mesh (e.g. Meshtastic) for areas with no coverage at all, and
 ETA per runner.
 
 Map data © OpenStreetMap contributors. Topo map style © OpenTopoMap
-(CC-BY-SA).
+(CC-BY-SA). Other layers credit their providers on the map. 3D view:
+[MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js) and
+[maplibre-contour](https://github.com/onthegomap/maplibre-contour) (BSD-3-Clause),
+contour labels in Noto Sans (SIL OFL, `assets/map3d/glyphs/OFL.txt`).

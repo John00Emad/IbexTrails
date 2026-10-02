@@ -3,7 +3,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -26,10 +25,12 @@ import 'course_picker.dart';
 import 'elevation_profile.dart';
 import 'fuel_sheet.dart';
 import 'group_sheet.dart';
+import 'layers_sheet.dart';
 import 'route_picker.dart';
 import 'settings_screen.dart';
 import 'sos_sheet.dart';
 import 'status_style.dart';
+import 'terrain_map.dart';
 import 'trail_map.dart';
 
 class RunScreen extends StatefulWidget {
@@ -52,7 +53,7 @@ enum _MenuAction {
   editCourse,
   route,
   download,
-  style,
+  layers,
   screen,
   save,
   settings,
@@ -61,6 +62,7 @@ enum _MenuAction {
 
 class _RunScreenState extends State<RunScreen> {
   final _map = MapController();
+  final _terrain = TerrainController();
   bool _follow = true;
   String? _selected;
   String? _dismissedAnnouncement;
@@ -71,6 +73,9 @@ class _RunScreenState extends State<RunScreen> {
 
   RunSession get s => widget.session;
   AppSettings get settings => s.settings;
+
+  bool get _in3d => settings.mapSetup.terrain3d;
+  TrailMapCamera get _camera => _in3d ? _terrain : FlatMapCamera(_map);
 
   @override
   void initState() {
@@ -115,12 +120,7 @@ class _RunScreenState extends State<RunScreen> {
     final r = s.route;
     if (r == null) return;
     final (sw, ne) = r.bounds;
-    _map.fitCamera(
-      CameraFit.bounds(
-        bounds: LatLngBounds(ll(sw), ll(ne)),
-        padding: const EdgeInsets.fromLTRB(40, 140, 40, 260),
-      ),
-    );
+    _camera.fitBounds(sw, ne);
     setState(() => _follow = false);
   }
 
@@ -215,10 +215,7 @@ class _RunScreenState extends State<RunScreen> {
       _selected = id;
       _follow = false;
     });
-    _map.move(
-      LatLng(p.latest.lat, p.latest.lon),
-      math.max(_map.camera.zoom, 15),
-    );
+    _camera.centerOn(GeoPoint(p.latest.lat, p.latest.lon));
   }
 
   Future<void> _announce() async {
@@ -271,46 +268,37 @@ class _RunScreenState extends State<RunScreen> {
     if (route == null) return;
     _prefetch?.cancel();
     setState(() => _prefetchProgress = const PrefetchProgress(0, 1, 0));
-    _prefetch = MapTiles.prefetchRoute(route, settings.mapStyle).listen(
-      (p) => setState(() => _prefetchProgress = p),
-      onDone: () {
-        final p = _prefetchProgress;
-        setState(() => _prefetchProgress = null);
-        if (!mounted || p == null) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              p.failed == 0
-                  ? 'Map saved for offline use along the route'
-                  : 'Map saved (${p.failed} tiles failed; try again with a '
-                        'better connection)',
-            ),
-          ),
+    _prefetch = MapTiles.prefetchRoute(route, settings.resolvedMap, in3d: _in3d)
+        .listen(
+          (p) => setState(() => _prefetchProgress = p),
+          onDone: () {
+            final p = _prefetchProgress;
+            setState(() => _prefetchProgress = null);
+            if (!mounted || p == null) return;
+            final saved = p.failed == 0
+                ? 'Map saved for offline use along the route.'
+                : 'Map saved (${p.failed} tiles failed; try again with a '
+                      'better connection).';
+            final skipped = p.skipped.isEmpty
+                ? ''
+                : ' Not included, as their providers don\'t allow it: '
+                      '${p.skipped.join(', ')}. Those show offline only '
+                      'where you have already viewed them.';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(saved + skipped),
+                duration: Duration(seconds: skipped.isEmpty ? 4 : 8),
+              ),
+            );
+          },
         );
-      },
-    );
   }
 
-  Future<void> _chooseStyle() async {
-    final style = await showDialog<MapStyle>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('Map style'),
-        children: [
-          for (final m in MapStyle.values)
-            ListTile(
-              leading: Icon(
-                m == settings.mapStyle
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked,
-              ),
-              title: Text(m.label),
-              onTap: () => Navigator.pop(context, m),
-            ),
-        ],
-      ),
-    );
-    if (style != null) setState(() => settings.mapStyle = style);
+  void _chooseLayers() => showLayersSheet(context, settings);
+
+  void _toggle3d() {
+    final setup = settings.mapSetup;
+    settings.mapSetup = setup.copyWith(terrain3d: !setup.terrain3d);
   }
 
   Future<void> _saveRecording() async {
@@ -418,8 +406,8 @@ class _RunScreenState extends State<RunScreen> {
         _changeRoute();
       case _MenuAction.download:
         _downloadMap();
-      case _MenuAction.style:
-        _chooseStyle();
+      case _MenuAction.layers:
+        _chooseLayers();
       case _MenuAction.screen:
         final on = !settings.keepScreenOn;
         settings.keepScreenOn = on;
@@ -446,21 +434,32 @@ class _RunScreenState extends State<RunScreen> {
         if (!didPop) _leave();
       },
       child: ListenableBuilder(
-        listenable: s,
+        // Settings too, so layer changes show while the sheet is open.
+        listenable: Listenable.merge([s, settings]),
         builder: (context, _) => Scaffold(
           appBar: _appBar(context),
           body: Stack(
             children: [
               Positioned.fill(
-                child: TrailMap(
-                  session: s,
-                  controller: _map,
-                  style: settings.mapStyle,
-                  follow: _follow,
-                  onFollowChanged: (f) => setState(() => _follow = f),
-                  selected: _selected,
-                  onSelect: (id) => setState(() => _selected = id),
-                ),
+                child: _in3d
+                    ? TerrainMap(
+                        session: s,
+                        controller: _terrain,
+                        map: settings.resolvedMap,
+                        follow: _follow,
+                        onFollowChanged: (f) => setState(() => _follow = f),
+                        selected: _selected,
+                        onSelect: (id) => setState(() => _selected = id),
+                      )
+                    : TrailMap(
+                        session: s,
+                        controller: _map,
+                        map: settings.resolvedMap,
+                        follow: _follow,
+                        onFollowChanged: (f) => setState(() => _follow = f),
+                        selected: _selected,
+                        onSelect: (id) => setState(() => _selected = id),
+                      ),
               ),
               Positioned(
                 left: 8,
@@ -474,6 +473,9 @@ class _RunScreenState extends State<RunScreen> {
                 child: _MapButtons(
                   follow: _follow,
                   onFollow: () => setState(() => _follow = true),
+                  in3d: _in3d,
+                  onToggle3d: _toggle3d,
+                  onTilt: _in3d ? _terrain.toggleTilt : null,
                   onSos: () => showSosSheet(context, s),
                   sosActive: s.sos,
                   onFuel: s.fuel == null
@@ -579,10 +581,10 @@ class _RunScreenState extends State<RunScreen> {
                 ),
               ),
             const PopupMenuItem(
-              value: _MenuAction.style,
+              value: _MenuAction.layers,
               child: ListTile(
                 leading: Icon(Icons.layers_outlined),
-                title: Text('Map style'),
+                title: Text('Map layers'),
               ),
             ),
             PopupMenuItem(
@@ -932,6 +934,9 @@ class _MapButtons extends StatelessWidget {
   const _MapButtons({
     required this.follow,
     required this.onFollow,
+    required this.in3d,
+    required this.onToggle3d,
+    required this.onTilt,
     required this.onSos,
     required this.sosActive,
     required this.onFuel,
@@ -939,6 +944,11 @@ class _MapButtons extends StatelessWidget {
 
   final bool follow;
   final VoidCallback onFollow;
+  final bool in3d;
+  final VoidCallback onToggle3d;
+
+  /// Tilt / north-up, in the 3D view only.
+  final VoidCallback? onTilt;
   final VoidCallback onSos;
   final bool sosActive;
   final VoidCallback? onFuel;
@@ -948,6 +958,25 @@ class _MapButtons extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        FloatingActionButton.small(
+          heroTag: '3d',
+          tooltip: in3d ? 'Flat map' : '3D terrain',
+          onPressed: onToggle3d,
+          child: Text(
+            in3d ? '2D' : '3D',
+            style: const TextStyle(fontWeight: FontWeight.w900),
+          ),
+        ),
+        if (onTilt != null) ...[
+          const SizedBox(height: 12),
+          FloatingActionButton.small(
+            heroTag: 'tilt',
+            tooltip: 'Tilt / north up',
+            onPressed: onTilt,
+            child: const Icon(Icons.explore_outlined),
+          ),
+        ],
+        const SizedBox(height: 12),
         FloatingActionButton.small(
           heroTag: 'follow',
           tooltip: 'Follow my position',
