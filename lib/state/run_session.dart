@@ -20,11 +20,12 @@ import '../core/group.dart';
 import '../core/protocol.dart';
 import '../core/route.dart';
 import '../core/route_matcher.dart';
+import '../core/run_stats.dart';
 import '../core/turns.dart';
 import '../services/location_service.dart';
 import '../services/notifications.dart';
 import '../services/relay_client.dart';
-import '../services/route_library.dart';
+import '../services/run_library.dart';
 import '../services/settings.dart';
 import '../services/voice.dart';
 
@@ -122,6 +123,11 @@ class RunSession extends ChangeNotifier {
   final List<DateTime> recordedTimes = [];
   bool sos = false;
   int? battery;
+
+  // ---- Recording (kept in My runs) ---------------------------------------
+  TrackWriter? _track;
+  Future<void> _trackJob = Future.value();
+  bool _trackClosed = false;
 
   // ---- Reporting ---------------------------------------------------------
   final List<TrailPoint> _pendingTrail = [];
@@ -221,6 +227,7 @@ class RunSession extends ChangeNotifier {
       startedAt: startedAt,
     );
     await s._connect();
+    if (startedAt != null) await s._resumeTrack();
     await s._startTracking();
     return s;
   }
@@ -724,6 +731,7 @@ class RunSession extends ChangeNotifier {
         notifier.fuel(r);
       }
     }
+    _syncTrack();
     notifyListeners();
   }
 
@@ -1041,20 +1049,106 @@ class RunSession extends ChangeNotifier {
     return ok;
   }
 
-  /// Saves what this device recorded as a GPX file.
-  Future<File?> saveRecording() async {
-    if (recorded.length < 2) return null;
-    final name = event?.name ?? route?.name ?? 'IbexTrails run';
-    return RouteLibrary.saveRecording(
-      name,
-      writeGpx(name: name, points: recorded, times: recordedTimes),
-    );
+  // ------------------------------------------------------------------------
+  // Recording, kept in My runs
+  // ------------------------------------------------------------------------
+
+  String get _runName =>
+      event?.name ??
+      route?.name ??
+      defaultRunName(
+        recordedTimes.isEmpty
+            ? (startedAt ?? DateTime.now())
+            : recordedTimes.first,
+      );
+
+  /// Writes the points recorded since the last call to the run's GPX file,
+  /// creating it once there is a track. Never fails: a full or broken disk
+  /// must not get in the way of navigation.
+  Future<void> _syncTrack() => _trackJob = _trackJob.then((_) async {
+    if (_trackClosed || recorded.length < 2) return;
+    try {
+      final w = _track;
+      if (w == null) {
+        final created = await TrackWriter.create(
+          _runName,
+          recorded,
+          recordedTimes,
+        );
+        _track = created;
+        // So a rejoin carries on in the same file.
+        if (code != null) settings.setRunData('rec:$code', created.id);
+      } else {
+        await w.append(_runName, recorded, recordedTimes);
+      }
+    } on Object catch (e) {
+      debugPrint('Could not save the run: $e');
+    }
+  });
+
+  /// After a rejoin, carries on with the recording made before the app was
+  /// closed, so the run stays in one piece.
+  Future<void> _resumeTrack() async {
+    final id = settings.runData('rec:$code');
+    if (id is! String) return;
+    try {
+      final resumed = await TrackWriter.resume(id);
+      if (resumed == null) return;
+      final (writer, gpx) = resumed;
+      for (var i = 0; i < gpx.track.length; i++) {
+        if (i > 0) {
+          distanceRun += distanceBetween(gpx.track[i - 1], gpx.track[i]);
+        }
+        recorded.add(gpx.track[i]);
+        recordedTimes.add(gpx.times[i] ?? startedAt ?? DateTime.now());
+      }
+      _track = writer;
+    } on Object catch (e) {
+      debugPrint('Could not continue the recorded run: $e');
+    }
   }
 
-  /// Leave the run. The organizer can also [endEvent], which clears the
-  /// event's data from the relay. [safe] tells the organizer the runner is
-  /// safely off the course, so they are counted as accounted for.
-  Future<void> leave({bool endEvent = false, bool safe = false}) async {
+  /// Saves the run to My runs under its final name. Null if there was
+  /// nothing worth keeping.
+  Future<SavedRun?> _finishRecording() async {
+    await _syncTrack();
+    _trackClosed = true;
+    if (code != null) settings.setRunData('rec:$code', null);
+    final w = _track;
+    if (w == null) return null;
+    try {
+      return await RunLibrary.finish(
+        w.file,
+        name: _runName,
+        points: recorded,
+        times: recordedTimes,
+      );
+    } on Object catch (e) {
+      debugPrint('Could not save the run: $e');
+      return null;
+    }
+  }
+
+  /// The GPX file of this run so far, e.g. to share it. Null until there
+  /// is a track.
+  Future<File?> trackFile() async {
+    await _syncTrack();
+    final w = _track;
+    if (w != null) return w.file;
+    if (recorded.length < 2) return null;
+    // The run's own file couldn't be written: share a temporary copy.
+    return File('${Directory.systemTemp.path}/ibextrails_run.gpx')
+        .writeAsString(
+          writeGpx(name: _runName, points: recorded, times: recordedTimes),
+        );
+  }
+
+  /// Leave the run, saving it to My runs. The organizer can also
+  /// [endEvent], which clears the event's data from the relay. [safe] tells
+  /// the organizer the runner is safely off the course, so they are counted
+  /// as accounted for. Returns the saved run, or null if there was nothing
+  /// to keep.
+  Future<SavedRun?> leave({bool endEvent = false, bool safe = false}) async {
     final r = relay;
     if (r != null && r.isOnline) {
       if (endEvent && isOrganizer) {
@@ -1096,11 +1190,13 @@ class RunSession extends ChangeNotifier {
       // Give the last messages a moment to leave the device.
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
+    final saved = await _finishRecording();
     settings.activeEvent = null;
     await notifier.cancel(NoteId.offRoute);
     await notifier.cancel(NoteId.wrongWay);
     await notifier.cancel(NoteId.fuel);
     dispose();
+    return saved;
   }
 
   @override

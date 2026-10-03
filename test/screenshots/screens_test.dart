@@ -25,13 +25,16 @@ import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/core/route.dart';
 import 'package:ibex_trails/services/notifications.dart';
 import 'package:ibex_trails/services/relay_client.dart';
+import 'package:ibex_trails/services/run_library.dart';
 import 'package:ibex_trails/services/settings.dart';
 import 'package:ibex_trails/state/run_session.dart';
 import 'package:ibex_trails/ui/course_editor_screen.dart';
 import 'package:ibex_trails/ui/course_picker.dart';
 import 'package:ibex_trails/ui/group_sheet.dart';
 import 'package:ibex_trails/ui/home_screen.dart';
+import 'package:ibex_trails/ui/run_detail_screen.dart';
 import 'package:ibex_trails/ui/run_screen.dart';
+import 'package:ibex_trails/ui/runs_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers.dart';
@@ -109,6 +112,53 @@ TrailRoute _demoRoute() {
   );
 }
 
+/// A flat loop of [radius] metres.
+TrailRoute _circle(double radius) => TrailRoute.fromPoints('Loop', [
+  for (var a = 0.0; a <= 360; a += 5)
+    offset(
+      -2000 + radius * math.sin(a * math.pi / 180),
+      radius * (1 - math.cos(a * math.pi / 180)),
+      120,
+    ),
+]);
+
+/// Saves a run along [route] in My runs: [secondsPerKm] on the flat, and
+/// slower uphill.
+Future<SavedRun?> _record(
+  String name,
+  TrailRoute route,
+  DateTime start,
+  double secondsPerKm,
+) async {
+  final pts = <GeoPoint>[];
+  final times = <DateTime>[];
+  var t = start;
+  for (var a = 0.0; a <= route.length; a += 20) {
+    final p = route.pointAt(a);
+    if (pts.isNotEmpty) {
+      final climb = math.max(0.0, (p.ele ?? 0) - (pts.last.ele ?? 0));
+      t = t.add(
+        Duration(milliseconds: (20 * secondsPerKm + 2000 * climb).round()),
+      );
+    }
+    pts.add(p);
+    times.add(t);
+  }
+  final w = await TrackWriter.create(name, pts, times);
+  return RunLibrary.finish(w.file, name: name, points: pts, times: times);
+}
+
+/// Lets file and isolate work started by a screen finish: widget tests
+/// otherwise run on fake time.
+Future<void> _settleIo(WidgetTester tester) async {
+  for (var i = 0; i < 40; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 25)),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+}
+
 Future<void> _shot(WidgetTester tester, GlobalKey key, String name) async {
   for (var i = 0; i < 5; i++) {
     await tester.pump(const Duration(milliseconds: 100));
@@ -141,6 +191,11 @@ void main() {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       const MethodChannel('plugins.flutter.io/path_provider'),
       (call) async => tmp.path,
+    );
+    // The run screen releases the wake lock when it closes.
+    tester.binding.defaultBinaryMessenger.setMockMessageHandler(
+      'dev.flutter.pigeon.wakelock_plus_platform_interface.WakelockPlusApi.toggle',
+      (_) async => const StandardMessageCodec().encodeMessage(<Object?>[null]),
     );
     tester.view.physicalSize = const Size(393 * 2.5, 852 * 2.5);
     tester.view.devicePixelRatio = 2.5;
@@ -375,6 +430,33 @@ void main() {
     session.notifyListeners();
     await tester.pump(const Duration(seconds: 1));
     await _shot(tester, key, '12_turn_warning');
+
+    // My runs, and the summary of one of them. A folder of their own, so
+    // the organizer's track recorded above doesn't show up.
+    final runs = Directory('${tmp.path}/my_runs')..createSync();
+    RunLibrary.debugDirectory = runs;
+    addTearDown(() => RunLibrary.debugDirectory = null);
+    final longRun = (await tester.runAsync(() async {
+      await _record('Morning run', _circle(700), DateTime(2026, 9, 27, 6), 345);
+      await _record(
+        'Wadi Degla tempo',
+        short.route,
+        DateTime(2026, 9, 30, 6, 30),
+        300,
+      );
+      return _record(
+        'Sunday long run',
+        shared,
+        DateTime(2026, 10, 3, 6, 10),
+        330,
+      );
+    }))!;
+    await tester.pumpWidget(app(const RunsScreen()));
+    await _settleIo(tester);
+    await _shot(tester, key, '13_my_runs');
+    await tester.pumpWidget(app(RunDetailScreen(run: longRun)));
+    await _settleIo(tester);
+    await _shot(tester, key, '14_run_summary');
 
     await tester.pumpWidget(const SizedBox());
     debugDisableShadows = true;

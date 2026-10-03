@@ -19,6 +19,7 @@ import '../core/turns.dart';
 import '../services/location_service.dart';
 import '../services/map_tiles.dart';
 import '../services/relay_client.dart';
+import '../services/run_library.dart';
 import '../services/settings.dart';
 import '../state/run_session.dart';
 import 'course_editor_screen.dart';
@@ -27,10 +28,32 @@ import 'elevation_profile.dart';
 import 'fuel_sheet.dart';
 import 'group_sheet.dart';
 import 'route_picker.dart';
+import 'run_detail_screen.dart';
 import 'settings_screen.dart';
 import 'sos_sheet.dart';
 import 'status_style.dart';
 import 'trail_map.dart';
+
+/// Starts a run with [start] and shows it. Errors are shown in a snack bar.
+Future<void> openRun(
+  BuildContext context,
+  Future<RunSession> Function() start,
+) async {
+  final navigator = Navigator.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final session = await start();
+    if (!context.mounted) {
+      session.dispose();
+      return;
+    }
+    await navigator.push(
+      MaterialPageRoute<void>(builder: (_) => RunScreen(session: session)),
+    );
+  } on Object catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('Could not start: $e')));
+  }
+}
 
 class RunScreen extends StatefulWidget {
   const RunScreen({
@@ -314,7 +337,7 @@ class _RunScreenState extends State<RunScreen> {
   }
 
   Future<void> _saveRecording() async {
-    final file = await s.saveRecording();
+    final file = await s.trackFile();
     if (!mounted) return;
     if (file == null) {
       ScaffoldMessenger.of(context)
@@ -361,21 +384,20 @@ class _RunScreenState extends State<RunScreen> {
         ),
       );
       if (safe != true) return;
-      await s.leave(safe: true);
-      if (mounted) Navigator.of(context).pop();
+      _closeRun(await s.leave(safe: true));
       return;
     }
     final endAll = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(s.isEvent ? 'Leave the run?' : 'Stop navigating?'),
+        title: Text(s.isEvent ? 'Leave the run?' : 'Stop this run?'),
         content: Text(
           s.isOrganizer
               ? 'Ending the event removes the route and everyone\'s positions '
                     'from the relay. Leaving keeps it running for the others.'
               : s.isEvent
               ? 'You finished. The group will see that you left.'
-              : 'Your recorded track can be saved from the menu first.',
+              : 'Your run is saved to My runs.',
         ),
         actions: [
           TextButton(
@@ -402,8 +424,21 @@ class _RunScreenState extends State<RunScreen> {
       ),
     );
     if (endAll == null) return;
-    await s.leave(endEvent: endAll);
-    if (mounted) Navigator.of(context).pop();
+    _closeRun(await s.leave(endEvent: endAll));
+  }
+
+  /// After leaving: shows the run just saved, or goes back if there was
+  /// nothing to keep.
+  void _closeRun(SavedRun? run) {
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    if (run == null) {
+      navigator.pop();
+    } else {
+      navigator.pushReplacement(
+        MaterialPageRoute<void>(builder: (_) => RunDetailScreen(run: run)),
+      );
+    }
   }
 
   void _onMenu(_MenuAction a) {
@@ -504,7 +539,9 @@ class _RunScreenState extends State<RunScreen> {
                   ? () => _openGroup(view: GroupView.headcount)
                   : null,
               child: _ConnectionLine(session: s),
-            ),
+            )
+          else
+            const _RecordingLine(),
         ],
       ),
       leading: IconButton(
@@ -875,6 +912,27 @@ class _ConnectionLine extends StatelessWidget {
   }
 }
 
+/// "● Recording" under a solo run's title: the run goes to My runs.
+class _RecordingLine extends StatelessWidget {
+  const _RecordingLine();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.circle, size: 10, color: TrailColors.danger),
+        const SizedBox(width: 4),
+        Text(
+          'Recording',
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: Colors.white70, letterSpacing: 0.5),
+        ),
+      ],
+    );
+  }
+}
+
 class _Banner extends StatelessWidget {
   const _Banner({
     required this.color,
@@ -1001,26 +1059,26 @@ class _StatsPanel extends StatelessWidget {
     if (route != null) {
       final along = m?.along ?? 0;
       tiles.addAll([
-        _Stat(
+        StatTile(
           'Done ${(100 * along / route.length).clamp(0, 100).round()}%',
           formatDistance(along),
           null,
         ),
-        _Stat('To go', formatDistance(route.length - along), null),
+        StatTile('To go', formatDistance(route.length - along), null),
         if (route.hasElevation)
-          _Stat(
+          StatTile(
             'Climb left',
             '${route.ascentRemaining(along).round()} m',
             null,
           ),
-        _Stat('Time', formatDuration(elapsed), null),
+        StatTile('Time', formatDuration(elapsed), null),
       ]);
     } else {
       tiles.addAll([
-        _Stat('Distance', formatDistance(s.distanceRun), null),
-        _Stat('Time', formatDuration(elapsed), null),
-        _Stat('Pace', pace, '/km'),
-        _Stat(
+        StatTile('Distance', formatDistance(s.distanceRun), null),
+        StatTile('Time', formatDuration(elapsed), null),
+        StatTile('Pace', pace, '/km'),
+        StatTile(
           'Elevation',
           s.fix == null ? '–' : '${s.fix!.altitude.round()} m',
           null,
@@ -1099,8 +1157,9 @@ class _StatsPanel extends StatelessWidget {
   }
 }
 
-class _Stat extends StatelessWidget {
-  const _Stat(this.label, this.value, this.suffix);
+/// A number with a small label above it, e.g. "DISTANCE 12.4 km".
+class StatTile extends StatelessWidget {
+  const StatTile(this.label, this.value, this.suffix, {super.key});
   final String label;
   final String value;
   final String? suffix;

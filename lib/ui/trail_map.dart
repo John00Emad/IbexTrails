@@ -318,14 +318,14 @@ class _TrailMapState extends State<TrailMap> {
               point: ll(route.start),
               width: 30,
               height: 30,
-              child: const _RoundIcon(Icons.flag, TrailColors.ok),
+              child: const RoundIcon(Icons.flag, TrailColors.ok),
             ),
             if (!route.isLoop)
               Marker(
                 point: ll(route.finish),
                 width: 30,
                 height: 30,
-                child: const _RoundIcon(Icons.sports_score, Colors.black87),
+                child: const RoundIcon(Icons.sports_score, Colors.black87),
               ),
           ],
         ),
@@ -399,7 +399,7 @@ class _TrailMapState extends State<TrailMap> {
         length: ScalebarLength.s,
       ),
     );
-    layers.add(_Attribution(src.attribution));
+    layers.add(MapAttribution(src.attribution));
 
     return FlutterMap(
       mapController: widget.controller,
@@ -411,8 +411,8 @@ class _TrailMapState extends State<TrailMap> {
 
 /// Compact attribution that wraps instead of overflowing on narrow phones
 /// and stays clear of the map buttons on the right.
-class _Attribution extends StatelessWidget {
-  const _Attribution(this.text);
+class MapAttribution extends StatelessWidget {
+  const MapAttribution(this.text, {super.key});
   final String text;
 
   @override
@@ -438,8 +438,9 @@ class _Attribution extends StatelessWidget {
   }
 }
 
-class _RoundIcon extends StatelessWidget {
-  const _RoundIcon(this.icon, this.color);
+/// A white-ringed round map marker, e.g. the start flag.
+class RoundIcon extends StatelessWidget {
+  const RoundIcon(this.icon, this.color, {super.key});
   final IconData icon;
   final Color color;
 

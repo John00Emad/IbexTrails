@@ -16,6 +16,7 @@ class GpxData {
   const GpxData({
     required this.name,
     required this.track,
+    required this.times,
     required this.waypoints,
   });
 
@@ -25,6 +26,9 @@ class GpxData {
   /// All track segments (or, if the file has no track, route points)
   /// joined into one continuous line in file order.
   final List<GeoPoint> track;
+
+  /// When each [track] point was recorded, null where the file doesn't say.
+  final List<DateTime?> times;
 
   final List<GpxWaypoint> waypoints;
 }
@@ -54,14 +58,19 @@ GpxData parseGpx(String source) {
   }
 
   final track = <GeoPoint>[];
+  final times = <DateTime?>[];
+  void add(XmlElement pt) {
+    final p = _point(pt);
+    if (p == null) return;
+    track.add(p);
+    times.add(DateTime.tryParse(_text(pt, 'time') ?? ''));
+  }
+
   String? trackName;
   for (final trk in _children(root, 'trk')) {
     trackName ??= _text(trk, 'name');
     for (final seg in _children(trk, 'trkseg')) {
-      for (final pt in _children(seg, 'trkpt')) {
-        final p = _point(pt);
-        if (p != null) track.add(p);
-      }
+      _children(seg, 'trkpt').forEach(add);
     }
   }
 
@@ -69,10 +78,7 @@ GpxData parseGpx(String source) {
   if (track.isEmpty) {
     for (final rte in _children(root, 'rte')) {
       routeName ??= _text(rte, 'name');
-      for (final pt in _children(rte, 'rtept')) {
-        final p = _point(pt);
-        if (p != null) track.add(p);
-      }
+      _children(rte, 'rtept').forEach(add);
     }
   }
 
@@ -100,9 +106,11 @@ GpxData parseGpx(String source) {
     );
   }
 
+  final (points, pointTimes) = _dropDuplicates(track, times);
   return GpxData(
     name: metaName ?? trackName ?? routeName ?? _text(root, 'name'),
-    track: _dropDuplicates(track),
+    track: points,
+    times: pointTimes,
     waypoints: waypoints,
   );
 }
@@ -125,64 +133,98 @@ GeoPoint? _point(XmlElement e) {
 }
 
 /// Removes consecutive points at the exact same position (common when
-/// devices log while standing still), keeping the first one.
-List<GeoPoint> _dropDuplicates(List<GeoPoint> pts) {
+/// devices log while standing still), keeping the first one and its time.
+(List<GeoPoint>, List<DateTime?>) _dropDuplicates(
+  List<GeoPoint> pts,
+  List<DateTime?> times,
+) {
   final out = <GeoPoint>[];
-  for (final p in pts) {
+  final outTimes = <DateTime?>[];
+  for (var i = 0; i < pts.length; i++) {
+    final p = pts[i];
     if (out.isNotEmpty && out.last.lat == p.lat && out.last.lon == p.lon) {
       continue;
     }
     out.add(p);
+    outTimes.add(times[i]);
   }
-  return out;
+  return (out, outTimes);
 }
+
+// A recorded track is written as gpxHeader + gpxTrackPoints + gpxFooter.
+// Keeping the pieces separate lets a recording grow on disk: new points go
+// in just before the footer, and the file is a whole GPX document after
+// every write.
+
+/// Start of a GPX 1.1 document with one track, up to its open `<trkseg>`.
+String gpxHeader(String name, {DateTime? time}) {
+  final n = _escape(name);
+  return '<?xml version="1.0" encoding="UTF-8"?>\n'
+      '<gpx version="1.1" creator="IbexTrails" '
+      'xmlns="http://www.topografix.com/GPX/1/1">\n'
+      '  <metadata>\n'
+      '    <name>$n</name>\n'
+      '${time == null ? '' : '    <time>${_utc(time)}</time>\n'}'
+      '  </metadata>\n'
+      '  <trk>\n'
+      '    <name>$n</name>\n'
+      '    <trkseg>\n';
+}
+
+/// One `<trkpt>` line per point, with its time when [times] has one.
+String gpxTrackPoints(List<GeoPoint> points, [List<DateTime?>? times]) {
+  final b = StringBuffer();
+  for (var i = 0; i < points.length; i++) {
+    final p = points[i];
+    final t = times != null && i < times.length ? times[i] : null;
+    b
+      ..write('      <trkpt lat="${p.lat.toStringAsFixed(7)}" ')
+      ..write('lon="${p.lon.toStringAsFixed(7)}">')
+      ..write(p.ele == null ? '' : '<ele>${p.ele!.toStringAsFixed(1)}</ele>')
+      ..write(t == null ? '' : '<time>${_utc(t)}</time>')
+      ..write('</trkpt>\n');
+  }
+  return b.toString();
+}
+
+/// Closes a document started by [gpxHeader].
+const gpxFooter = '    </trkseg>\n  </trk>\n</gpx>\n';
 
 /// Writes a minimal GPX 1.1 document for a recorded track.
 String writeGpx({
   required String name,
   required List<GeoPoint> points,
-  List<DateTime>? times,
+  List<DateTime?>? times,
 }) {
-  final b = XmlBuilder();
-  b.processing('xml', 'version="1.0" encoding="UTF-8"');
-  b.element(
-    'gpx',
-    nest: () {
-      b.attribute('version', '1.1');
-      b.attribute('creator', 'IbexTrails');
-      b.attribute('xmlns', 'http://www.topografix.com/GPX/1/1');
-      b.element('metadata', nest: () => b.element('name', nest: name));
-      b.element(
-        'trk',
-        nest: () {
-          b.element('name', nest: name);
-          b.element(
-            'trkseg',
-            nest: () {
-              for (var i = 0; i < points.length; i++) {
-                final p = points[i];
-                b.element(
-                  'trkpt',
-                  nest: () {
-                    b.attribute('lat', p.lat.toStringAsFixed(7));
-                    b.attribute('lon', p.lon.toStringAsFixed(7));
-                    if (p.ele != null) {
-                      b.element('ele', nest: p.ele!.toStringAsFixed(1));
-                    }
-                    if (times != null && i < times.length) {
-                      b.element(
-                        'time',
-                        nest: times[i].toUtc().toIso8601String(),
-                      );
-                    }
-                  },
-                );
-              }
-            },
-          );
-        },
-      );
-    },
-  );
-  return b.buildDocument().toXmlString(pretty: true);
+  final start = times?.nonNulls.firstOrNull;
+  return gpxHeader(name, time: start) +
+      gpxTrackPoints(points, times) +
+      gpxFooter;
 }
+
+/// Closes a GPX file that was cut off while being written (the app was
+/// killed mid-write), keeping every complete track point. Returns null if
+/// [source] has no track to keep.
+String? repairGpx(String source) {
+  const point = '</trkpt>';
+  const segment = '<trkseg>';
+  final lastPoint = source.lastIndexOf(point);
+  final firstSegment = source.indexOf(segment);
+  final cut = lastPoint >= 0
+      ? lastPoint + point.length
+      : firstSegment >= 0
+      ? firstSegment + segment.length
+      : -1;
+  if (cut < 0) return null;
+  return '${source.substring(0, cut)}\n$gpxFooter';
+}
+
+String _utc(DateTime t) => t.toUtc().toIso8601String();
+
+/// Escapes text for an XML element, dropping control characters XML 1.0
+/// doesn't allow.
+String _escape(String s) => s
+    .replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'), '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
