@@ -20,9 +20,9 @@ built with Flutter.
 |---|---|---|---|
 | ![Turn warning](docs/screenshots/12_turn_warning.png) | ![Headcount](docs/screenshots/10_headcount.png) | ![QR code](docs/screenshots/11_qr.png) | ![Map layers](docs/screenshots/13_layers.png) |
 
-| My runs | Run summary |
-|---|---|
-| ![My runs](docs/screenshots/14_my_runs.png) | ![Run summary](docs/screenshots/15_run_summary.png) |
+| Run solo, no GPX needed | Recording on the map | My runs | Run summary |
+|---|---|---|---|
+| ![Run solo](docs/screenshots/16_run_solo.png) | ![Recording](docs/screenshots/17_recording.png) | ![My runs](docs/screenshots/14_my_runs.png) | ![Run summary](docs/screenshots/15_run_summary.png) |
 
 *(Screens rendered in the test harness, where map tiles are not downloaded, so
 the map background is blank. On a phone you see the map layers you picked.)*
@@ -30,6 +30,10 @@ the map background is blank. On a phone you see the map layers you picked.)*
 ## What it does
 
 **For every runner**
+- **Run solo, with or without a route.** *Run solo* → *Just run* opens the
+  map with your distance, pace and climb, no GPX needed, just like joining a
+  group run before the organizer shares a route. You can load a route later
+  from the menu.
 - **GPX navigation.** Load any `.gpx` file (from Strava, Komoot, Garmin,
   Wikiloc and so on). You see the route, arrows showing which way to run,
   waypoints, and your position.
@@ -69,15 +73,16 @@ the map background is blank. On a phone you see the map layers you picked.)*
 - **SOS screen.** Mark yourself as needing help to the whole group, call or
   **text your coordinates by SMS** to the organizer (SMS often gets through
   when data doesn't), or share your location through any app.
-- **Your runs, kept as GPX.** Every run is recorded: **Record a run** (no
-  route needed), solo navigation and group runs alike. **My runs** shows each
-  one on a map with distance, time, moving time, pace, climb, an elevation
-  profile and km splits. Runs are GPX files on your phone, written as you
-  run, so closing the app or a flat battery doesn't lose one. **Save to
-  phone** puts a copy in Downloads (or Drive, Files…), and **Run this route**
-  follows an old run again with all the alerts. **Add to saved routes** turns
-  it into a distance for a group run. On iPhone the files are also in the
-  Files app.
+- **Record when you want, kept as GPX.** Tap **● Record** on the map, solo
+  or in a group run. It shows **REC** and the time while recording; tap it
+  again to stop and save, and the run carries on (leaving the run saves it
+  too). **My runs** shows each recording on a map with distance, time,
+  moving time, pace, climb, an elevation profile and km splits. Recordings
+  are GPX files on your phone, written as you run, so closing the app or a
+  flat battery doesn't lose one. **Save to phone** puts a copy in Downloads
+  (or Drive, Files…), and **Run this route** follows an old run again with
+  all the alerts. **Add to saved routes** turns it into a distance for a
+  group run. On iPhone the files are also in the Files app.
 
 **For the organizer (and sweepers)**
 - Create an event, and you get a code like `K7MPQ-W3XZA`. Share it in the
@@ -182,7 +187,8 @@ flutter build apk --release # Android APK
    the screen off.
 5. **After the run:** check the **Headcount** (tap the line under the event
    name) until it says everyone is accounted for. Then tap ✕ → *End event*.
-   Everyone's own track is saved in **My runs** on the home screen.
+   Anyone who tapped **Record** finds their run in **My runs** on the home
+   screen.
 
 Tip: do a short test loop around the block first. Walk 60–70 m off the route to
 feel the alarm.

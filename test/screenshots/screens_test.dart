@@ -26,6 +26,7 @@ import 'package:ibex_trails/core/route.dart';
 import 'package:ibex_trails/services/map_layers.dart';
 import 'package:ibex_trails/services/notifications.dart';
 import 'package:ibex_trails/services/relay_client.dart';
+import 'package:ibex_trails/services/route_library.dart';
 import 'package:ibex_trails/services/run_library.dart';
 import 'package:ibex_trails/services/settings.dart';
 import 'package:ibex_trails/state/run_session.dart';
@@ -442,8 +443,7 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     settings.mapSetup = const MapSetup();
 
-    // My runs, and the summary of one of them. A folder of their own, so
-    // the organizer's track recorded above doesn't show up.
+    // My runs, and the summary of one of them, in a folder of their own.
     final runs = Directory('${tmp.path}/my_runs')..createSync();
     RunLibrary.debugDirectory = runs;
     addTearDown(() => RunLibrary.debugDirectory = null);
@@ -469,11 +469,56 @@ void main() {
     await _settleIo(tester);
     await _shot(tester, key, '15_run_summary');
 
+    // Run solo: just run, or pick a saved route to follow.
+    await tester.runAsync(() async {
+      await RouteLibrary.import(
+        writeGpx(name: 'Wadi Degla loop', points: route.points),
+      );
+      await RouteLibrary.import(
+        writeGpx(name: 'Sunday long run', points: shared.points),
+      );
+    });
+    // Not the organizer's event from above.
+    settings.activeEvent = null;
+    await tester.pumpWidget(app(const HomeScreen()));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('Run solo'));
+    await _settleIo(tester);
+    await _shot(tester, key, '16_run_solo');
+    await tester.tapAt(const Offset(200, 60));
+    await tester.pump(const Duration(seconds: 1));
+
+    // A solo run without a route, being recorded.
+    final soloGps = StreamController<Position>();
+    final solo = (await tester.runAsync(
+      () => RunSession.solo(
+        settings,
+        notifier,
+        locationSource: () => soloGps.stream,
+      ),
+    ))!;
+    solo.startRecording();
+    await tester.runAsync(() async {
+      for (var a = 0.0; a <= 2400; a += 40) {
+        soloGps.add(_fix(shared.pointAt(a)));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    final now = DateTime.now();
+    solo
+      ..startedAt = now.subtract(const Duration(minutes: 14, seconds: 7))
+      ..recordingSince = now.subtract(const Duration(minutes: 13, seconds: 42));
+    await tester.pumpWidget(app(RunScreen(session: solo)));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '17_recording');
+
     await tester.pumpWidget(const SizedBox());
     debugDisableShadows = true;
     await tester.runAsync(() async {
       session.dispose();
+      solo.dispose();
       await gps.close();
+      await soloGps.close();
     });
   });
 }

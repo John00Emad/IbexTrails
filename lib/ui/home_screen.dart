@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../brand.dart';
 import '../core/event_code.dart';
-import '../core/route.dart';
 import '../services/settings.dart';
 import '../state/run_session.dart';
 import 'fuel_plan_screen.dart';
@@ -33,19 +32,14 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  /// A run on your own, following a route or just running.
   Future<void> _solo() async {
     final app = AppScope.of(context);
-    final TrailRoute? route = await pickRoute(context);
-    if (route == null || !mounted) return;
+    final choice = await pickSoloRoute(context);
+    if (choice == null || !mounted) return;
     await _openRun(
-      () => RunSession.solo(app.settings, app.notifier, route: route),
+      () => RunSession.solo(app.settings, app.notifier, route: choice.route),
     );
-  }
-
-  /// A run without a route, just recorded.
-  Future<void> _record() async {
-    final app = AppScope.of(context);
-    await _openRun(() => RunSession.solo(app.settings, app.notifier));
   }
 
   Future<void> _resume(ActiveEvent active) async {
@@ -164,21 +158,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     _ActionCard(
                       icon: Icons.explore_outlined,
                       color: Brand.night,
-                      title: 'Navigate solo',
+                      title: 'Run solo',
                       subtitle:
-                          'Follow a GPX route with off-route and '
-                          'wrong-way alerts. No mobile data needed.',
+                          'Just run, or follow a GPX route with off-route '
+                          'and wrong-way alerts. No mobile data needed.',
                       onTap: _busy ? null : _solo,
-                    ),
-                    _ActionCard(
-                      icon: Icons.fiber_manual_record,
-                      color: Brand.ember,
-                      title: 'Record a run',
-                      subtitle:
-                          'Track your distance, pace and climb, no route '
-                          'needed. Every run is kept in My runs as a GPX '
-                          'file.',
-                      onTap: _busy ? null : _record,
                     ),
                     Card(
                       child: ListTile(
