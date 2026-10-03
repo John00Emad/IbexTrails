@@ -354,6 +354,8 @@ void main() {
         locationSource: () => gps.stream,
       );
       addTearDown(me.dispose);
+      // The runner taps Record on the map.
+      me.startRecording();
       await waitFor(() => me.courses.length == 2, what: 'both courses');
       expect(me.needsCourseChoice, isTrue);
       expect(me.courseList.map((c) => c.name), ['10 km', '4 km']);
@@ -414,7 +416,7 @@ void main() {
         what: 'announcement',
       );
 
-      // The run is kept in My runs under the event's name.
+      // The recording is kept in My runs under the event's name.
       final saved = await me.leave();
       expect(saved!.name, 'Hill repeats');
       expect(saved.distance, greaterThan(1000));
@@ -438,6 +440,7 @@ void main() {
       role: Role.runner,
       locationSource: () => gps.stream,
     );
+    before.startRecording();
     for (var e = 0.0; e <= 500; e += 50) {
       gps.add(fixAt(offset(0, e)));
     }
@@ -458,8 +461,10 @@ void main() {
       startedAt: active.startedAt,
       locationSource: () => gps2.stream,
     );
+    expect(after.isRecording, isTrue);
     expect(after.recorded, hasLength(11));
     expect(after.distanceRun, closeTo(500, 2));
+    expect(after.recordingDistance, closeTo(500, 2));
     for (var e = 550.0; e <= 1000; e += 50) {
       gps2.add(fixAt(offset(0, e)));
     }
@@ -469,5 +474,42 @@ void main() {
     expect(saved.file.path, file.path);
     expect(saved.distance, closeTo(1000, 2));
     expect(await RunLibrary.list(), hasLength(1));
+  });
+
+  test('a rejoin records only if the runner was recording', () async {
+    final code = normalizeEventCode(generateEventCode())!;
+    final gps = StreamController<Position>();
+    final before = await RunSession.join(
+      settings,
+      Notifier(),
+      code: code,
+      role: Role.runner,
+      locationSource: () => gps.stream,
+    );
+    // Recording, then stopped before the app was closed.
+    before.startRecording();
+    for (var e = 0.0; e <= 500; e += 50) {
+      gps.add(fixAt(offset(0, e)));
+    }
+    await waitFor(() => before.recorded.length == 11, what: 'first half');
+    final first = (await before.stopRecording())!;
+    before.dispose();
+    await gps.close();
+
+    final active = settings.activeEvent!;
+    final after = await RunSession.join(
+      settings,
+      Notifier(),
+      code: active.code,
+      role: active.role,
+      startedAt: active.startedAt,
+      locationSource: () => const Stream.empty(),
+    );
+    expect(after.isRecording, isFalse);
+    expect(after.recorded, isEmpty);
+    expect(await after.leave(), isNull);
+    expect((await RunLibrary.list()).single.id, first.id);
+    // Leaving the event forgets it.
+    expect(settings.activeEvent, isNull);
   });
 }

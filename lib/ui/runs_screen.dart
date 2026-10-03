@@ -48,9 +48,8 @@ class _RunsScreenState extends State<RunsScreen> {
               icon: Icons.directions_run,
               title: 'No runs yet',
               text:
-                  'Tap Record a run on the home screen. Every run you do '
-                  'with IbexTrails, solo or in a group, is kept here as a '
-                  'GPX file.',
+                  'During a run, solo or in a group, tap Record on the map. '
+                  'What you record is kept here as a GPX file.',
             );
           }
           return ListView.builder(

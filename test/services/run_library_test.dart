@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:ibex_trails/core/geo.dart';
 import 'package:ibex_trails/core/gpx.dart';
+import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/services/notifications.dart';
 import 'package:ibex_trails/services/run_library.dart';
 import 'package:ibex_trails/services/settings.dart';
@@ -59,6 +60,7 @@ void main() {
 
   test('a run is on disk while recorded, and kept when it ends', () async {
     final (session, gps) = await startRun();
+    session.startRecording();
     final pts = eastLine(1500);
     final times = _times(pts.length);
     for (var i = 0; i < 20; i++) {
@@ -97,6 +99,7 @@ void main() {
 
   test('a run shorter than 100 m is not kept', () async {
     final (session, gps) = await startRun();
+    session.startRecording();
     final pts = eastLine(80, step: 40);
     final times = _times(pts.length);
     for (var i = 0; i < pts.length; i++) {
@@ -109,6 +112,93 @@ void main() {
     expect(await session.leave(), isNull);
     await gps.close();
     expect(file.existsSync(), isFalse);
+    expect(await RunLibrary.list(), isEmpty);
+  });
+
+  test('nothing is kept unless the run is recorded', () async {
+    final (session, gps) = await startRun();
+    final pts = eastLine(1500);
+    final times = _times(pts.length);
+    for (var i = 0; i < pts.length; i++) {
+      gps.add(_fix(pts[i], times[i]));
+    }
+    await pumpEventQueue();
+    expect(session.isRecording, isFalse);
+    expect(session.distanceRun, closeTo(1500, 2));
+
+    // The track can still be exported, as a temporary copy.
+    final copy = (await session.trackFile())!;
+    expect(copy.parent.path, isNot(dir.path));
+    expect(parseGpx(copy.readAsStringSync()).track, hasLength(pts.length));
+
+    expect(await session.leave(), isNull);
+    await gps.close();
+    expect(dir.listSync(), isEmpty);
+    expect(await RunLibrary.list(), isEmpty);
+  });
+
+  test('each recording in a run is kept on its own', () async {
+    final (session, gps) = await startRun();
+    final pts = eastLine(1500);
+    final times = _times(pts.length);
+    Future<void> runTo(int from, int to) async {
+      for (var i = from; i < to; i++) {
+        gps.add(_fix(pts[i], times[i]));
+      }
+      await pumpEventQueue();
+    }
+
+    // 0-300 m not recorded, 300-800 m recorded, 800-1000 m not, then
+    // 1000-1500 m recorded until the run ends.
+    await runTo(0, 6);
+    session.startRecording();
+    expect(session.isRecording, isTrue);
+    await runTo(6, 17);
+    expect(session.recordingDistance, closeTo(500, 1));
+    final first = (await session.stopRecording())!;
+    expect(session.isRecording, isFalse);
+    expect(session.recordingDistance, 0);
+    expect(first.distance, closeTo(500, 1));
+    expect(first.start, times[6]);
+    expect(parseGpx(first.file.readAsStringSync()).track, hasLength(11));
+
+    await runTo(17, 20);
+    session.startRecording();
+    await runTo(20, pts.length);
+    final second = (await session.leave())!;
+    await gps.close();
+    expect(second.file.path, isNot(first.file.path));
+    expect(second.distance, closeTo(500, 1));
+    expect(second.start, times[20]);
+    // The run itself counted every metre.
+    expect(session.distanceRun, closeTo(1500, 2));
+
+    final listed = await RunLibrary.list();
+    expect(listed.map((r) => r.id), [second.id, first.id]);
+  });
+
+  test('a solo run keeps a group run waiting to be rejoined', () async {
+    final settings = await AppSettings.load();
+    final waiting = ActiveEvent(
+      code: 'ABCD2345',
+      role: Role.runner,
+      startedAt: DateTime(2026, 10, 3, 6),
+    );
+    settings.activeEvent = waiting;
+    final (session, gps) = await startRun();
+    await session.leave();
+    await gps.close();
+    expect((await AppSettings.load()).activeEvent?.code, waiting.code);
+  });
+
+  test('stopping a recording with no track keeps nothing', () async {
+    final (session, gps) = await startRun();
+    session.startRecording();
+    expect(await session.stopRecording(), isNull);
+    expect(await session.stopRecording(), isNull);
+    expect(session.isRecording, isFalse);
+    session.dispose();
+    await gps.close();
     expect(await RunLibrary.list(), isEmpty);
   });
 

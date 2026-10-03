@@ -29,9 +29,16 @@ enum _Action { save, addRoute, rename, delete }
 /// One recorded run: its track on the map, its numbers, and running it
 /// again.
 class RunDetailScreen extends StatefulWidget {
-  const RunDetailScreen({super.key, required this.run});
+  const RunDetailScreen({
+    super.key,
+    required this.run,
+    this.canRunAgain = true,
+  });
 
   final SavedRun run;
+
+  /// Offers "Run this route". Off when opened during a run.
+  final bool canRunAgain;
 
   @override
   State<RunDetailScreen> createState() => _RunDetailScreenState();
@@ -309,7 +316,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
                 ),
               ],
             ),
-      bottomNavigationBar: d == null
+      bottomNavigationBar: d == null || !widget.canRunAgain
           ? null
           : SafeArea(
               child: Padding(

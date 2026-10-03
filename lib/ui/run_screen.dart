@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
@@ -324,6 +325,75 @@ class _RunScreenState extends State<RunScreen> {
     settings.mapSetup = setup.copyWith(terrain3d: !setup.terrain3d);
   }
 
+  /// Record button: starts recording, or asks before stopping and saving.
+  Future<void> _toggleRecording() async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!s.isRecording) {
+      s.startRecording();
+      HapticFeedback.mediumImpact();
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Recording. Tap REC to stop and save to My runs.'),
+          ),
+        );
+      return;
+    }
+    final since = s.recordingSince;
+    final took = since == null
+        ? Duration.zero
+        : DateTime.now().difference(since);
+    final stop = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Stop recording?'),
+        content: Text(
+          '${formatDistance(s.recordingDistance)} in ${formatDuration(took)}. '
+          'It is saved to My runs, and your run carries on.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Keep recording'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Stop & save'),
+          ),
+        ],
+      ),
+    );
+    if (stop != true || !mounted) return;
+    final navigator = Navigator.of(context);
+    final run = await s.stopRecording();
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+    if (run == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Not kept: recordings under 100 m aren\'t saved.'),
+        ),
+      );
+      return;
+    }
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Saved to My runs: ${run.name}'),
+        action: SnackBarAction(
+          label: 'VIEW',
+          onPressed: () => navigator.push(
+            MaterialPageRoute<void>(
+              // The run is still going: no second run from here.
+              builder: (_) => RunDetailScreen(run: run, canRunAgain: false),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _saveRecording() async {
     final file = await s.trackFile();
     if (!mounted) return;
@@ -380,12 +450,17 @@ class _RunScreenState extends State<RunScreen> {
       builder: (context) => AlertDialog(
         title: Text(s.isEvent ? 'Leave the run?' : 'Stop this run?'),
         content: Text(
-          s.isOrganizer
-              ? 'Ending the event removes the route and everyone\'s positions '
-                    'from the relay. Leaving keeps it running for the others.'
-              : s.isEvent
-              ? 'You finished. The group will see that you left.'
-              : 'Your run is saved to My runs.',
+          [
+            if (s.isOrganizer)
+              'Ending the event removes the route and everyone\'s positions '
+                  'from the relay. Leaving keeps it running for the others.'
+            else if (s.isEvent)
+              'You finished. The group will see that you left.',
+            if (s.isRecording)
+              'Your recording is saved to My runs.'
+            else if (!s.isEvent)
+              'You didn\'t record this run, so it isn\'t kept in My runs.',
+          ].join(' '),
         ),
         actions: [
           TextButton(
@@ -505,17 +580,33 @@ class _RunScreenState extends State<RunScreen> {
               Positioned(
                 right: 12,
                 bottom: 12,
-                child: _MapButtons(
-                  follow: _follow,
-                  onFollow: () => setState(() => _follow = true),
-                  in3d: _in3d,
-                  onToggle3d: _toggle3d,
-                  onTilt: _in3d ? _terrain.toggleTilt : null,
-                  onSos: () => showSosSheet(context, s),
-                  sosActive: s.sos,
-                  onFuel: s.fuel == null
-                      ? null
-                      : () => showFuelSheet(context, s),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    // Lined up with the small buttons, which are centred
+                    // over the wider SOS button.
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _RecordButton(
+                        session: s,
+                        onPressed: _toggleRecording,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _MapButtons(
+                      follow: _follow,
+                      onFollow: () => setState(() => _follow = true),
+                      in3d: _in3d,
+                      onToggle3d: _toggle3d,
+                      onTilt: _in3d ? _terrain.toggleTilt : null,
+                      onSos: () => showSosSheet(context, s),
+                      sosActive: s.sos,
+                      onFuel: s.fuel == null
+                          ? null
+                          : () => showFuelSheet(context, s),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -541,9 +632,7 @@ class _RunScreenState extends State<RunScreen> {
                   ? () => _openGroup(view: GroupView.headcount)
                   : null,
               child: _ConnectionLine(session: s),
-            )
-          else
-            const _RecordingLine(),
+            ),
         ],
       ),
       leading: IconButton(
@@ -914,27 +1003,6 @@ class _ConnectionLine extends StatelessWidget {
   }
 }
 
-/// "● Recording" under a solo run's title: the run goes to My runs.
-class _RecordingLine extends StatelessWidget {
-  const _RecordingLine();
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Icon(Icons.circle, size: 10, color: TrailColors.danger),
-        const SizedBox(width: 4),
-        Text(
-          'Recording',
-          style: Theme.of(context).textTheme.bodySmall
-              ?.copyWith(color: Colors.white70, letterSpacing: 0.5),
-        ),
-      ],
-    );
-  }
-}
-
 class _Banner extends StatelessWidget {
   const _Banner({
     required this.color,
@@ -980,6 +1048,81 @@ class _Banner extends StatelessWidget {
                 ),
                 ...actions,
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Record / stop, over the map. While recording it shows how long the
+/// recording has been going, with a dot that blinks like a camera's REC
+/// light (the run screen rebuilds every second).
+class _RecordButton extends StatelessWidget {
+  const _RecordButton({required this.session, required this.onPressed});
+
+  final RunSession session;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final recording = session.isRecording;
+    final since = session.recordingSince;
+    final took = since == null
+        ? Duration.zero
+        : DateTime.now().difference(since);
+    final label = Theme.of(context).textTheme.labelLarge?.copyWith(
+      color: recording ? Colors.white : Brand.night,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0.5,
+      // Steady width while the seconds tick.
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return Tooltip(
+      message: recording ? 'Stop recording' : 'Start recording',
+      child: Semantics(
+        button: true,
+        child: Material(
+          color: recording ? TrailColors.danger : Colors.white,
+          shape: const StadiumBorder(),
+          elevation: 6,
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: onPressed,
+            child: Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: recording
+                    ? [
+                        Icon(
+                          Icons.circle,
+                          size: 12,
+                          color: took.inSeconds.isEven
+                              ? Colors.white
+                              : Colors.white38,
+                        ),
+                        const SizedBox(width: 8),
+                        Text('REC ${formatDuration(took)}', style: label),
+                        const SizedBox(width: 8),
+                        const Icon(
+                          Icons.stop_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ]
+                    : [
+                        const Icon(
+                          Icons.fiber_manual_record,
+                          color: TrailColors.danger,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 6),
+                        Text('Record', style: label),
+                      ],
+              ),
             ),
           ),
         ),
