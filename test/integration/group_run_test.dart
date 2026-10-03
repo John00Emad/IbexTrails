@@ -19,6 +19,7 @@ import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/core/route.dart';
 import 'package:ibex_trails/services/notifications.dart';
 import 'package:ibex_trails/services/relay_client.dart';
+import 'package:ibex_trails/services/run_library.dart';
 import 'package:ibex_trails/services/settings.dart';
 import 'package:ibex_trails/state/run_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -129,6 +130,12 @@ void main() {
       ..relayPort = port
       ..relayTls = false
       ..reportSeconds = 10;
+    final runs = Directory.systemTemp.createTempSync('ibex_runs');
+    RunLibrary.debugDirectory = runs;
+    addTearDown(() {
+      RunLibrary.debugDirectory = null;
+      runs.deleteSync(recursive: true);
+    });
   });
 
   final route = TrailRoute.fromPoints('River trail', [
@@ -407,7 +414,10 @@ void main() {
         what: 'announcement',
       );
 
-      await me.leave();
+      // The run is kept in My runs under the event's name.
+      final saved = await me.leave();
+      expect(saved!.name, 'Hill repeats');
+      expect(saved.distance, greaterThan(1000));
       await waitFor(
         () =>
             organizer.reports[settings.participantId]?.status ==
@@ -417,4 +427,47 @@ void main() {
       await gps.close();
     },
   );
+
+  test('a rejoin carries on recording the run in the same file', () async {
+    final code = normalizeEventCode(generateEventCode())!;
+    final gps = StreamController<Position>();
+    final before = await RunSession.join(
+      settings,
+      Notifier(),
+      code: code,
+      role: Role.runner,
+      locationSource: () => gps.stream,
+    );
+    for (var e = 0.0; e <= 500; e += 50) {
+      gps.add(fixAt(offset(0, e)));
+    }
+    await waitFor(() => before.recorded.length == 11, what: 'first half');
+    final file = (await before.trackFile())!;
+    // The app is closed mid-run, without leaving...
+    before.dispose();
+    await gps.close();
+
+    // ...and the runner taps Rejoin.
+    final active = settings.activeEvent!;
+    final gps2 = StreamController<Position>();
+    final after = await RunSession.join(
+      settings,
+      Notifier(),
+      code: active.code,
+      role: active.role,
+      startedAt: active.startedAt,
+      locationSource: () => gps2.stream,
+    );
+    expect(after.recorded, hasLength(11));
+    expect(after.distanceRun, closeTo(500, 2));
+    for (var e = 550.0; e <= 1000; e += 50) {
+      gps2.add(fixAt(offset(0, e)));
+    }
+    await waitFor(() => after.recorded.length == 21, what: 'second half');
+    final saved = (await after.leave())!;
+    await gps2.close();
+    expect(saved.file.path, file.path);
+    expect(saved.distance, closeTo(1000, 2));
+    expect(await RunLibrary.list(), hasLength(1));
+  });
 }

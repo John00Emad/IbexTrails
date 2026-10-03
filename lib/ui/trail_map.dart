@@ -349,14 +349,14 @@ class _TrailMapState extends State<TrailMap> {
               point: ll(route.start),
               width: 30,
               height: 30,
-              child: const _RoundIcon(Icons.flag, TrailColors.ok),
+              child: const RoundIcon(Icons.flag, TrailColors.ok),
             ),
             if (!route.isLoop)
               Marker(
                 point: ll(route.finish),
                 width: 30,
                 height: 30,
-                child: const _RoundIcon(Icons.sports_score, Colors.black87),
+                child: const RoundIcon(Icons.sports_score, Colors.black87),
               ),
           ],
         ),
@@ -469,8 +469,9 @@ class MapAttribution extends StatelessWidget {
   }
 }
 
-class _RoundIcon extends StatelessWidget {
-  const _RoundIcon(this.icon, this.color);
+/// A white-ringed round map marker, e.g. the start flag.
+class RoundIcon extends StatelessWidget {
+  const RoundIcon(this.icon, this.color, {super.key});
   final IconData icon;
   final Color color;
 

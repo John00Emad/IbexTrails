@@ -11,6 +11,7 @@ import 'join_screen.dart';
 import 'organize_screen.dart';
 import 'route_picker.dart';
 import 'run_screen.dart';
+import 'runs_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -26,19 +27,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openRun(Future<RunSession> Function() start) async {
     setState(() => _busy = true);
     try {
-      final session = await start();
-      if (!mounted) {
-        session.dispose();
-        return;
-      }
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => RunScreen(session: session)),
-      );
-    } on Object catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Could not start: $e')));
-      }
+      await openRun(context, start);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -51,6 +40,12 @@ class _HomeScreenState extends State<HomeScreen> {
     await _openRun(
       () => RunSession.solo(app.settings, app.notifier, route: route),
     );
+  }
+
+  /// A run without a route, just recorded.
+  Future<void> _record() async {
+    final app = AppScope.of(context);
+    await _openRun(() => RunSession.solo(app.settings, app.notifier));
   }
 
   Future<void> _resume(ActiveEvent active) async {
@@ -174,6 +169,34 @@ class _HomeScreenState extends State<HomeScreen> {
                           'Follow a GPX route with off-route and '
                           'wrong-way alerts. No mobile data needed.',
                       onTap: _busy ? null : _solo,
+                    ),
+                    _ActionCard(
+                      icon: Icons.fiber_manual_record,
+                      color: Brand.ember,
+                      title: 'Record a run',
+                      subtitle:
+                          'Track your distance, pace and climb, no route '
+                          'needed. Every run is kept in My runs as a GPX '
+                          'file.',
+                      onTap: _busy ? null : _record,
+                    ),
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.history, color: Brand.canyon),
+                        title: const Text(
+                          'My runs',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        subtitle: const Text(
+                          'Your recorded runs, saved as GPX on this phone',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const RunsScreen(),
+                          ),
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     const _WadiChecklist(),
