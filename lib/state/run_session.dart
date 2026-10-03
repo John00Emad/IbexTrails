@@ -168,8 +168,7 @@ class RunSession extends ChangeNotifier {
     );
     // A solo run always starts fresh.
     settings.setRunData('fuel:solo', null);
-    settings.setRunData('cp:solo', null);
-    if (route != null) s._useCourse(Course.fromRoute(route, id: _localCourse));
+    if (route != null) s._useLocalRoute(route);
     await s._startTracking();
     return s;
   }
@@ -590,9 +589,17 @@ class RunSession extends ChangeNotifier {
     if (isOrganizer) {
       addCourse(r);
     } else {
-      _useCourse(Course.fromRoute(r, id: _localCourse));
+      _useLocalRoute(r);
     }
     notifyListeners();
+  }
+
+  /// Navigate [r], loaded on this phone rather than shared by an organizer.
+  void _useLocalRoute(TrailRoute r) {
+    // A solo run never resumes, so passes saved for the local course are
+    // from another run or another route (checkpoint ids repeat: cp1...).
+    if (!isEvent) settings.setRunData('cp:$_runKey:$_localCourse', null);
+    _useCourse(Course.fromRoute(r, id: _localCourse));
   }
 
   /// Organizer: add a distance to the event and switch to it.
