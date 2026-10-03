@@ -1,61 +1,28 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 
 import '../core/route.dart';
-import 'settings.dart';
+import 'map_layers.dart';
 
 const userAgentPackage = 'com.ibextrails.ibex_trails';
 
-class TileSource {
-  const TileSource({
-    required this.urlTemplate,
-    required this.attribution,
-    required this.maxNativeZoom,
-    this.subdomains = const [],
-  });
-
-  final String urlTemplate;
-  final List<String> subdomains;
-  final String attribution;
-  final int maxNativeZoom;
-
-  /// Same URL the map's tile layer will request, so prefetched tiles are
-  /// found in the cache.
-  String urlFor(int z, int x, int y) {
-    var url = urlTemplate
-        .replaceAll('{z}', '$z')
-        .replaceAll('{x}', '$x')
-        .replaceAll('{y}', '$y');
-    if (subdomains.isNotEmpty) {
-      url = url.replaceAll('{s}', subdomains[(x + y) % subdomains.length]);
-    }
-    return url;
-  }
-}
-
-TileSource tileSourceFor(MapStyle style) => switch (style) {
-  MapStyle.topo => const TileSource(
-    urlTemplate: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    subdomains: ['a', 'b', 'c'],
-    attribution:
-        '© OpenStreetMap contributors, SRTM · © OpenTopoMap (CC-BY-SA)',
-    maxNativeZoom: 17,
-  ),
-  MapStyle.osm => const TileSource(
-    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '© OpenStreetMap contributors',
-    maxNativeZoom: 19,
-  ),
-};
-
 class PrefetchProgress {
-  const PrefetchProgress(this.done, this.total, this.failed);
+  const PrefetchProgress(
+    this.done,
+    this.total,
+    this.failed, {
+    this.skipped = const [],
+  });
   final int done;
   final int total;
   final int failed;
+
+  /// Layers left out because their terms don't allow downloading ahead.
+  final List<String> skipped;
   bool get finished => done + failed >= total;
 }
 
@@ -76,18 +43,68 @@ class MapTiles {
         overrideFreshAge: const Duration(days: 60),
       );
 
-  static TileLayer layer(MapStyle style) {
-    final src = tileSourceFor(style);
-    return TileLayer(
-      urlTemplate: src.urlTemplate,
-      subdomains: src.subdomains,
-      maxNativeZoom: src.maxNativeZoom,
-      userAgentPackageName: userAgentPackage,
-      tileProvider: NetworkTileProvider(
-        cachingProvider: cache,
-        silenceExceptions: true,
-      ),
-    );
+  static TileLayer layer(MapLayer l, {double opacity = 1, String key = ''}) =>
+      TileLayer(
+        urlTemplate: l.urlTemplate,
+        subdomains: l.subdomains,
+        additionalOptions: {'key': key},
+        maxNativeZoom: l.maxNativeZoom,
+        userAgentPackageName: userAgentPackage,
+        tileDisplay: opacity < 1
+            ? TileDisplay.instantaneous(opacity: opacity)
+            : const TileDisplay.fadeIn(),
+        tileProvider: NetworkTileProvider(
+          cachingProvider: cache,
+          silenceExceptions: true,
+        ),
+      );
+
+  static const _userAgent = 'flutter_map ($userAgentPackage)';
+
+  /// Tile bytes for [url] from the cache, downloading them when missing or
+  /// stale. A stale tile is still returned when there is no signal.
+  /// `fetched` tells whether the network was used.
+  static Future<({Uint8List bytes, bool fetched})> fetchTile(
+    String url, {
+    required http.Client client,
+    MapCachingProvider? cache,
+  }) async {
+    final store = cache ?? MapTiles.cache;
+    CachedMapTile? cached;
+    try {
+      cached = await store.getTile(url);
+    } on Object {
+      cached = null;
+    }
+    if (cached != null && !cached.metadata.isStale) {
+      return (bytes: cached.bytes, fetched: false);
+    }
+    final http.Response res;
+    try {
+      res = await client
+          .get(Uri.parse(url), headers: {'User-Agent': _userAgent})
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode != 200) {
+        throw http.ClientException('HTTP ${res.statusCode}', Uri.parse(url));
+      }
+    } on Object {
+      if (cached != null) return (bytes: cached.bytes, fetched: false);
+      rethrow;
+    }
+    try {
+      await store.putTile(
+        url: url,
+        metadata: CachedMapTileMetadata(
+          staleAt: DateTime.timestamp().add(const Duration(days: 60)),
+          lastModified: null,
+          etag: res.headers['etag'],
+        ),
+        bytes: res.bodyBytes,
+      );
+    } on Object {
+      // Still worth showing; it is cached next time round.
+    }
+    return (bytes: res.bodyBytes, fetched: true);
   }
 
   /// Tiles covering a corridor of [bufferMeters] either side of the route.
@@ -127,57 +144,66 @@ class MapTiles {
     return (x, y);
   }
 
-  /// Downloads the route corridor into the cache. Cancel by cancelling the
-  /// stream subscription.
+  /// Zoom levels downloaded for [l] along a route: enough detail to run
+  /// with, without hammering the servers. Elevation needs less, since the
+  /// terrain, hillshade and contours are smoothed from it anyway.
+  static (int, int) prefetchZooms(MapLayer l) => l.kind == LayerKind.elevation
+      ? (8, math.min(12, l.maxNativeZoom))
+      : (11, math.min(16, l.maxNativeZoom));
+
+  /// Downloads the route corridor of every layer the map shows into the
+  /// cache. Layers whose terms don't allow it are skipped (and listed in
+  /// the progress). Cancel by cancelling the stream subscription.
   static Stream<PrefetchProgress> prefetchRoute(
     TrailRoute route,
-    MapStyle style, {
+    ResolvedMap map, {
+    required bool in3d,
     int maxTiles = 2500,
+    http.Client? client,
+    MapCachingProvider? cache,
   }) async* {
-    final src = tileSourceFor(style);
-    final all = corridorTiles(
-      route,
-      maxZoom: math.min(16, src.maxNativeZoom),
-    ).toList()..sort((a, b) => a.$1.compareTo(b.$1));
+    final layers = map.fetched(in3d: in3d);
+    final skipped = [
+      for (final l in layers)
+        if (!l.allowsBulkDownload) l.name,
+    ];
+    final all = <(int, int, int, MapLayer)>[];
+    for (final l in layers.where((l) => l.allowsBulkDownload)) {
+      final (minZoom, maxZoom) = prefetchZooms(l);
+      for (final (z, x, y) in corridorTiles(
+        route,
+        minZoom: minZoom,
+        maxZoom: maxZoom,
+      )) {
+        all.add((z, x, y, l));
+      }
+    }
+    // Coarse zooms first, so a cut-off download is still useful.
+    all.sort((a, b) => a.$1.compareTo(b.$1));
     final tiles = all.take(maxTiles).toList();
-    final client = http.Client();
+    final httpClient = client ?? http.Client();
     var done = 0, failed = 0;
     try {
-      yield PrefetchProgress(0, tiles.length, 0);
-      for (final (z, x, y) in tiles) {
-        final url = src.urlFor(z, x, y);
+      yield PrefetchProgress(0, tiles.length, 0, skipped: skipped);
+      for (final (z, x, y, l) in tiles) {
         try {
-          final cached = await cache.getTile(url);
-          if (cached == null || cached.metadata.isStale) {
-            final res = await client
-                .get(
-                  Uri.parse(url),
-                  headers: {'User-Agent': 'flutter_map ($userAgentPackage)'},
-                )
-                .timeout(const Duration(seconds: 20));
-            if (res.statusCode != 200) {
-              throw http.ClientException('HTTP ${res.statusCode}');
-            }
-            await cache.putTile(
-              url: url,
-              metadata: CachedMapTileMetadata(
-                staleAt: DateTime.timestamp().add(const Duration(days: 60)),
-                lastModified: null,
-                etag: res.headers['etag'],
-              ),
-              bytes: res.bodyBytes,
-            );
-            // Be gentle with volunteer-run tile servers.
+          final r = await fetchTile(
+            l.urlFor(z, x, y, key: map.keyFor(l)),
+            client: httpClient,
+            cache: cache,
+          );
+          // Be gentle with volunteer-run tile servers.
+          if (r.fetched) {
             await Future<void>.delayed(const Duration(milliseconds: 80));
           }
           done++;
         } on Object {
           failed++;
         }
-        yield PrefetchProgress(done, tiles.length, failed);
+        yield PrefetchProgress(done, tiles.length, failed, skipped: skipped);
       }
     } finally {
-      client.close();
+      if (client == null) httpClient.close();
     }
   }
 }

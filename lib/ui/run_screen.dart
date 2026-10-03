@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -19,6 +19,7 @@ import '../core/turns.dart';
 import '../services/location_service.dart';
 import '../services/map_tiles.dart';
 import '../services/relay_client.dart';
+import '../services/run_library.dart';
 import '../services/settings.dart';
 import '../state/run_session.dart';
 import 'course_editor_screen.dart';
@@ -26,11 +27,35 @@ import 'course_picker.dart';
 import 'elevation_profile.dart';
 import 'fuel_sheet.dart';
 import 'group_sheet.dart';
+import 'layers_sheet.dart';
 import 'route_picker.dart';
+import 'run_detail_screen.dart';
 import 'settings_screen.dart';
 import 'sos_sheet.dart';
 import 'status_style.dart';
+import 'terrain_map.dart';
 import 'trail_map.dart';
+
+/// Starts a run with [start] and shows it. Errors are shown in a snack bar.
+Future<void> openRun(
+  BuildContext context,
+  Future<RunSession> Function() start,
+) async {
+  final navigator = Navigator.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final session = await start();
+    if (!context.mounted) {
+      session.dispose();
+      return;
+    }
+    await navigator.push(
+      MaterialPageRoute<void>(builder: (_) => RunScreen(session: session)),
+    );
+  } on Object catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('Could not start: $e')));
+  }
+}
 
 class RunScreen extends StatefulWidget {
   const RunScreen({
@@ -52,7 +77,7 @@ enum _MenuAction {
   editCourse,
   route,
   download,
-  style,
+  layers,
   screen,
   save,
   settings,
@@ -61,6 +86,7 @@ enum _MenuAction {
 
 class _RunScreenState extends State<RunScreen> {
   final _map = MapController();
+  final _terrain = TerrainController();
   bool _follow = true;
   String? _selected;
   String? _dismissedAnnouncement;
@@ -71,6 +97,9 @@ class _RunScreenState extends State<RunScreen> {
 
   RunSession get s => widget.session;
   AppSettings get settings => s.settings;
+
+  bool get _in3d => settings.mapSetup.terrain3d;
+  TrailMapCamera get _camera => _in3d ? _terrain : FlatMapCamera(_map);
 
   @override
   void initState() {
@@ -115,12 +144,7 @@ class _RunScreenState extends State<RunScreen> {
     final r = s.route;
     if (r == null) return;
     final (sw, ne) = r.bounds;
-    _map.fitCamera(
-      CameraFit.bounds(
-        bounds: LatLngBounds(ll(sw), ll(ne)),
-        padding: const EdgeInsets.fromLTRB(40, 140, 40, 260),
-      ),
-    );
+    _camera.fitBounds(sw, ne);
     setState(() => _follow = false);
   }
 
@@ -215,10 +239,7 @@ class _RunScreenState extends State<RunScreen> {
       _selected = id;
       _follow = false;
     });
-    _map.move(
-      LatLng(p.latest.lat, p.latest.lon),
-      math.max(_map.camera.zoom, 15),
-    );
+    _camera.centerOn(GeoPoint(p.latest.lat, p.latest.lon));
   }
 
   Future<void> _announce() async {
@@ -271,50 +292,110 @@ class _RunScreenState extends State<RunScreen> {
     if (route == null) return;
     _prefetch?.cancel();
     setState(() => _prefetchProgress = const PrefetchProgress(0, 1, 0));
-    _prefetch = MapTiles.prefetchRoute(route, settings.mapStyle).listen(
-      (p) => setState(() => _prefetchProgress = p),
-      onDone: () {
-        final p = _prefetchProgress;
-        setState(() => _prefetchProgress = null);
-        if (!mounted || p == null) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              p.failed == 0
-                  ? 'Map saved for offline use along the route'
-                  : 'Map saved (${p.failed} tiles failed; try again with a '
-                        'better connection)',
-            ),
-          ),
+    _prefetch = MapTiles.prefetchRoute(route, settings.resolvedMap, in3d: _in3d)
+        .listen(
+          (p) => setState(() => _prefetchProgress = p),
+          onDone: () {
+            final p = _prefetchProgress;
+            setState(() => _prefetchProgress = null);
+            if (!mounted || p == null) return;
+            final saved = p.failed == 0
+                ? 'Map saved for offline use along the route.'
+                : 'Map saved (${p.failed} tiles failed; try again with a '
+                      'better connection).';
+            final skipped = p.skipped.isEmpty
+                ? ''
+                : ' Not included, as their providers don\'t allow it: '
+                      '${p.skipped.join(', ')}. Those show offline only '
+                      'where you have already viewed them.';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(saved + skipped),
+                duration: Duration(seconds: skipped.isEmpty ? 4 : 8),
+              ),
+            );
+          },
         );
-      },
-    );
   }
 
-  Future<void> _chooseStyle() async {
-    final style = await showDialog<MapStyle>(
+  void _chooseLayers() => showLayersSheet(context, settings);
+
+  void _toggle3d() {
+    final setup = settings.mapSetup;
+    settings.mapSetup = setup.copyWith(terrain3d: !setup.terrain3d);
+  }
+
+  /// Record button: starts recording, or asks before stopping and saving.
+  Future<void> _toggleRecording() async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!s.isRecording) {
+      s.startRecording();
+      HapticFeedback.mediumImpact();
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Recording. Tap REC to stop and save to My runs.'),
+          ),
+        );
+      return;
+    }
+    final since = s.recordingSince;
+    final took = since == null
+        ? Duration.zero
+        : DateTime.now().difference(since);
+    final stop = await showDialog<bool>(
       context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('Map style'),
-        children: [
-          for (final m in MapStyle.values)
-            ListTile(
-              leading: Icon(
-                m == settings.mapStyle
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked,
-              ),
-              title: Text(m.label),
-              onTap: () => Navigator.pop(context, m),
-            ),
+      builder: (context) => AlertDialog(
+        title: const Text('Stop recording?'),
+        content: Text(
+          '${formatDistance(s.recordingDistance)} in ${formatDuration(took)}. '
+          'It is saved to My runs, and your run carries on.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Keep recording'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Stop & save'),
+          ),
         ],
       ),
     );
-    if (style != null) setState(() => settings.mapStyle = style);
+    if (stop != true || !mounted) return;
+    final navigator = Navigator.of(context);
+    final run = await s.stopRecording();
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+    if (run == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Not kept: recordings under 100 m aren\'t saved.'),
+        ),
+      );
+      return;
+    }
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Saved to My runs: ${run.name}'),
+        action: SnackBarAction(
+          label: 'VIEW',
+          onPressed: () => navigator.push(
+            MaterialPageRoute<void>(
+              // The run is still going: no second run from here.
+              builder: (_) => RunDetailScreen(run: run, canRunAgain: false),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _saveRecording() async {
-    final file = await s.saveRecording();
+    final file = await s.trackFile();
     if (!mounted) return;
     if (file == null) {
       ScaffoldMessenger.of(context)
@@ -361,21 +442,25 @@ class _RunScreenState extends State<RunScreen> {
         ),
       );
       if (safe != true) return;
-      await s.leave(safe: true);
-      if (mounted) Navigator.of(context).pop();
+      _closeRun(await s.leave(safe: true));
       return;
     }
     final endAll = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(s.isEvent ? 'Leave the run?' : 'Stop navigating?'),
+        title: Text(s.isEvent ? 'Leave the run?' : 'Stop this run?'),
         content: Text(
-          s.isOrganizer
-              ? 'Ending the event removes the route and everyone\'s positions '
-                    'from the relay. Leaving keeps it running for the others.'
-              : s.isEvent
-              ? 'You finished. The group will see that you left.'
-              : 'Your recorded track can be saved from the menu first.',
+          [
+            if (s.isOrganizer)
+              'Ending the event removes the route and everyone\'s positions '
+                  'from the relay. Leaving keeps it running for the others.'
+            else if (s.isEvent)
+              'You finished. The group will see that you left.',
+            if (s.isRecording)
+              'Your recording is saved to My runs.'
+            else if (!s.isEvent)
+              'You didn\'t record this run, so it isn\'t kept in My runs.',
+          ].join(' '),
         ),
         actions: [
           TextButton(
@@ -402,8 +487,21 @@ class _RunScreenState extends State<RunScreen> {
       ),
     );
     if (endAll == null) return;
-    await s.leave(endEvent: endAll);
-    if (mounted) Navigator.of(context).pop();
+    _closeRun(await s.leave(endEvent: endAll));
+  }
+
+  /// After leaving: shows the run just saved, or goes back if there was
+  /// nothing to keep.
+  void _closeRun(SavedRun? run) {
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    if (run == null) {
+      navigator.pop();
+    } else {
+      navigator.pushReplacement(
+        MaterialPageRoute<void>(builder: (_) => RunDetailScreen(run: run)),
+      );
+    }
   }
 
   void _onMenu(_MenuAction a) {
@@ -418,8 +516,8 @@ class _RunScreenState extends State<RunScreen> {
         _changeRoute();
       case _MenuAction.download:
         _downloadMap();
-      case _MenuAction.style:
-        _chooseStyle();
+      case _MenuAction.layers:
+        _chooseLayers();
       case _MenuAction.screen:
         final on = !settings.keepScreenOn;
         settings.keepScreenOn = on;
@@ -446,21 +544,32 @@ class _RunScreenState extends State<RunScreen> {
         if (!didPop) _leave();
       },
       child: ListenableBuilder(
-        listenable: s,
+        // Settings too, so layer changes show while the sheet is open.
+        listenable: Listenable.merge([s, settings]),
         builder: (context, _) => Scaffold(
           appBar: _appBar(context),
           body: Stack(
             children: [
               Positioned.fill(
-                child: TrailMap(
-                  session: s,
-                  controller: _map,
-                  style: settings.mapStyle,
-                  follow: _follow,
-                  onFollowChanged: (f) => setState(() => _follow = f),
-                  selected: _selected,
-                  onSelect: (id) => setState(() => _selected = id),
-                ),
+                child: _in3d
+                    ? TerrainMap(
+                        session: s,
+                        controller: _terrain,
+                        map: settings.resolvedMap,
+                        follow: _follow,
+                        onFollowChanged: (f) => setState(() => _follow = f),
+                        selected: _selected,
+                        onSelect: (id) => setState(() => _selected = id),
+                      )
+                    : TrailMap(
+                        session: s,
+                        controller: _map,
+                        map: settings.resolvedMap,
+                        follow: _follow,
+                        onFollowChanged: (f) => setState(() => _follow = f),
+                        selected: _selected,
+                        onSelect: (id) => setState(() => _selected = id),
+                      ),
               ),
               Positioned(
                 left: 8,
@@ -471,14 +580,33 @@ class _RunScreenState extends State<RunScreen> {
               Positioned(
                 right: 12,
                 bottom: 12,
-                child: _MapButtons(
-                  follow: _follow,
-                  onFollow: () => setState(() => _follow = true),
-                  onSos: () => showSosSheet(context, s),
-                  sosActive: s.sos,
-                  onFuel: s.fuel == null
-                      ? null
-                      : () => showFuelSheet(context, s),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    // Lined up with the small buttons, which are centred
+                    // over the wider SOS button.
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _RecordButton(
+                        session: s,
+                        onPressed: _toggleRecording,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _MapButtons(
+                      follow: _follow,
+                      onFollow: () => setState(() => _follow = true),
+                      in3d: _in3d,
+                      onToggle3d: _toggle3d,
+                      onTilt: _in3d ? _terrain.toggleTilt : null,
+                      onSos: () => showSosSheet(context, s),
+                      sosActive: s.sos,
+                      onFuel: s.fuel == null
+                          ? null
+                          : () => showFuelSheet(context, s),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -579,10 +707,10 @@ class _RunScreenState extends State<RunScreen> {
                 ),
               ),
             const PopupMenuItem(
-              value: _MenuAction.style,
+              value: _MenuAction.layers,
               child: ListTile(
                 leading: Icon(Icons.layers_outlined),
-                title: Text('Map style'),
+                title: Text('Map layers'),
               ),
             ),
             PopupMenuItem(
@@ -928,10 +1056,88 @@ class _Banner extends StatelessWidget {
   }
 }
 
+/// Record / stop, over the map. While recording it shows how long the
+/// recording has been going, with a dot that blinks like a camera's REC
+/// light (the run screen rebuilds every second).
+class _RecordButton extends StatelessWidget {
+  const _RecordButton({required this.session, required this.onPressed});
+
+  final RunSession session;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final recording = session.isRecording;
+    final since = session.recordingSince;
+    final took = since == null
+        ? Duration.zero
+        : DateTime.now().difference(since);
+    final label = Theme.of(context).textTheme.labelLarge?.copyWith(
+      color: recording ? Colors.white : Brand.night,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0.5,
+      // Steady width while the seconds tick.
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return Tooltip(
+      message: recording ? 'Stop recording' : 'Start recording',
+      child: Semantics(
+        button: true,
+        child: Material(
+          color: recording ? TrailColors.danger : Colors.white,
+          shape: const StadiumBorder(),
+          elevation: 6,
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: onPressed,
+            child: Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: recording
+                    ? [
+                        Icon(
+                          Icons.circle,
+                          size: 12,
+                          color: took.inSeconds.isEven
+                              ? Colors.white
+                              : Colors.white38,
+                        ),
+                        const SizedBox(width: 8),
+                        Text('REC ${formatDuration(took)}', style: label),
+                        const SizedBox(width: 8),
+                        const Icon(
+                          Icons.stop_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ]
+                    : [
+                        const Icon(
+                          Icons.fiber_manual_record,
+                          color: TrailColors.danger,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 6),
+                        Text('Record', style: label),
+                      ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MapButtons extends StatelessWidget {
   const _MapButtons({
     required this.follow,
     required this.onFollow,
+    required this.in3d,
+    required this.onToggle3d,
+    required this.onTilt,
     required this.onSos,
     required this.sosActive,
     required this.onFuel,
@@ -939,6 +1145,11 @@ class _MapButtons extends StatelessWidget {
 
   final bool follow;
   final VoidCallback onFollow;
+  final bool in3d;
+  final VoidCallback onToggle3d;
+
+  /// Tilt / north-up, in the 3D view only.
+  final VoidCallback? onTilt;
   final VoidCallback onSos;
   final bool sosActive;
   final VoidCallback? onFuel;
@@ -948,6 +1159,25 @@ class _MapButtons extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        FloatingActionButton.small(
+          heroTag: '3d',
+          tooltip: in3d ? 'Flat map' : '3D terrain',
+          onPressed: onToggle3d,
+          child: Text(
+            in3d ? '2D' : '3D',
+            style: const TextStyle(fontWeight: FontWeight.w900),
+          ),
+        ),
+        if (onTilt != null) ...[
+          const SizedBox(height: 12),
+          FloatingActionButton.small(
+            heroTag: 'tilt',
+            tooltip: 'Tilt / north up',
+            onPressed: onTilt,
+            child: const Icon(Icons.explore_outlined),
+          ),
+        ],
+        const SizedBox(height: 12),
         FloatingActionButton.small(
           heroTag: 'follow',
           tooltip: 'Follow my position',
@@ -1001,26 +1231,26 @@ class _StatsPanel extends StatelessWidget {
     if (route != null) {
       final along = m?.along ?? 0;
       tiles.addAll([
-        _Stat(
+        StatTile(
           'Done ${(100 * along / route.length).clamp(0, 100).round()}%',
           formatDistance(along),
           null,
         ),
-        _Stat('To go', formatDistance(route.length - along), null),
+        StatTile('To go', formatDistance(route.length - along), null),
         if (route.hasElevation)
-          _Stat(
+          StatTile(
             'Climb left',
             '${route.ascentRemaining(along).round()} m',
             null,
           ),
-        _Stat('Time', formatDuration(elapsed), null),
+        StatTile('Time', formatDuration(elapsed), null),
       ]);
     } else {
       tiles.addAll([
-        _Stat('Distance', formatDistance(s.distanceRun), null),
-        _Stat('Time', formatDuration(elapsed), null),
-        _Stat('Pace', pace, '/km'),
-        _Stat(
+        StatTile('Distance', formatDistance(s.distanceRun), null),
+        StatTile('Time', formatDuration(elapsed), null),
+        StatTile('Pace', pace, '/km'),
+        StatTile(
           'Elevation',
           s.fix == null ? '–' : '${s.fix!.altitude.round()} m',
           null,
@@ -1099,8 +1329,9 @@ class _StatsPanel extends StatelessWidget {
   }
 }
 
-class _Stat extends StatelessWidget {
-  const _Stat(this.label, this.value, this.suffix);
+/// A number with a small label above it, e.g. "DISTANCE 12.4 km".
+class StatTile extends StatelessWidget {
+  const StatTile(this.label, this.value, this.suffix, {super.key});
   final String label;
   final String value;
   final String? suffix;

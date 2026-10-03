@@ -20,11 +20,12 @@ import '../core/group.dart';
 import '../core/protocol.dart';
 import '../core/route.dart';
 import '../core/route_matcher.dart';
+import '../core/run_stats.dart';
 import '../core/turns.dart';
 import '../services/location_service.dart';
 import '../services/notifications.dart';
 import '../services/relay_client.dart';
-import '../services/route_library.dart';
+import '../services/run_library.dart';
 import '../services/settings.dart';
 import '../services/voice.dart';
 
@@ -123,6 +124,21 @@ class RunSession extends ChangeNotifier {
   bool sos = false;
   int? battery;
 
+  // ---- Recording (kept in My runs) ---------------------------------------
+  /// Where the recording starts in [recorded]; null when not recording.
+  int? _recFrom;
+
+  /// When Record was tapped (after a rejoin: the recording's first point).
+  DateTime? recordingSince;
+
+  /// Metres covered since Record was tapped.
+  double recordingDistance = 0;
+  TrackWriter? _track;
+  Future<void> _trackJob = Future.value();
+
+  /// Whether this run is being kept in My runs.
+  bool get isRecording => _recFrom != null;
+
   // ---- Reporting ---------------------------------------------------------
   final List<TrailPoint> _pendingTrail = [];
   RunnerStatus? _lastSentStatus;
@@ -152,8 +168,7 @@ class RunSession extends ChangeNotifier {
     );
     // A solo run always starts fresh.
     settings.setRunData('fuel:solo', null);
-    settings.setRunData('cp:solo', null);
-    if (route != null) s._useCourse(Course.fromRoute(route, id: _localCourse));
+    if (route != null) s._useLocalRoute(route);
     await s._startTracking();
     return s;
   }
@@ -221,6 +236,7 @@ class RunSession extends ChangeNotifier {
       startedAt: startedAt,
     );
     await s._connect();
+    if (startedAt != null) await s._resumeTrack();
     await s._startTracking();
     return s;
   }
@@ -294,6 +310,8 @@ class RunSession extends ChangeNotifier {
       final step = last == null ? double.infinity : distanceBetween(last, here);
       if (step >= 5) {
         if (last != null) distanceRun += step;
+        final from = _recFrom;
+        if (from != null && recorded.length > from) recordingDistance += step;
         recorded.add(here);
         recordedTimes.add(p.timestamp);
         _pendingTrail.add(TrailPoint(here.lat, here.lon, p.timestamp));
@@ -571,9 +589,17 @@ class RunSession extends ChangeNotifier {
     if (isOrganizer) {
       addCourse(r);
     } else {
-      _useCourse(Course.fromRoute(r, id: _localCourse));
+      _useLocalRoute(r);
     }
     notifyListeners();
+  }
+
+  /// Navigate [r], loaded on this phone rather than shared by an organizer.
+  void _useLocalRoute(TrailRoute r) {
+    // A solo run never resumes, so passes saved for the local course are
+    // from another run or another route (checkpoint ids repeat: cp1...).
+    if (!isEvent) settings.setRunData('cp:$_runKey:$_localCourse', null);
+    _useCourse(Course.fromRoute(r, id: _localCourse));
   }
 
   /// Organizer: add a distance to the event and switch to it.
@@ -724,6 +750,7 @@ class RunSession extends ChangeNotifier {
         notifier.fuel(r);
       }
     }
+    _syncTrack();
     notifyListeners();
   }
 
@@ -1041,20 +1068,145 @@ class RunSession extends ChangeNotifier {
     return ok;
   }
 
-  /// Saves what this device recorded as a GPX file.
-  Future<File?> saveRecording() async {
-    if (recorded.length < 2) return null;
-    final name = event?.name ?? route?.name ?? 'IbexTrails run';
-    return RouteLibrary.saveRecording(
-      name,
-      writeGpx(name: name, points: recorded, times: recordedTimes),
-    );
+  // ------------------------------------------------------------------------
+  // Recording, kept in My runs
+  // ------------------------------------------------------------------------
+
+  /// The name the recording gets in My runs: the event's or route's, else
+  /// e.g. "Morning run" from when the recording started.
+  String get _runName {
+    final from = _recFrom ?? 0;
+    return event?.name ??
+        route?.name ??
+        defaultRunName(
+          from < recordedTimes.length
+              ? recordedTimes[from]
+              : (recordingSince ?? startedAt ?? DateTime.now()),
+        );
   }
 
-  /// Leave the run. The organizer can also [endEvent], which clears the
-  /// event's data from the relay. [safe] tells the organizer the runner is
-  /// safely off the course, so they are counted as accounted for.
-  Future<void> leave({bool endEvent = false, bool safe = false}) async {
+  /// Starts keeping the run in My runs, from here on, as a GPX file of its
+  /// own. Navigation, the trail on the map and the group don't change.
+  void startRecording() {
+    if (isRecording || _disposed) return;
+    _recFrom = recorded.length;
+    recordingSince = DateTime.now();
+    recordingDistance = 0;
+    _track = null;
+    // So a rejoin carries on recording, even before there is a file.
+    if (code != null) settings.setRunData('rec:$code', '');
+    notifyListeners();
+  }
+
+  /// Stops recording and keeps the recording in My runs. Null if there was
+  /// nothing worth keeping (under [RunLibrary.minDistance]). The run carries
+  /// on and can be recorded again.
+  Future<SavedRun?> stopRecording() async {
+    if (!isRecording) return null;
+    await _syncTrack();
+    final from = _recFrom;
+    // Already stopped while the last points were written.
+    if (from == null) return null;
+    final w = _track;
+    final points = recorded.sublist(from);
+    final times = recordedTimes.sublist(from);
+    final name = _runName;
+    _recFrom = null;
+    _track = null;
+    recordingSince = null;
+    recordingDistance = 0;
+    if (code != null) settings.setRunData('rec:$code', null);
+    notifyListeners();
+    if (w == null) return null;
+    try {
+      return await RunLibrary.finish(
+        w.file,
+        name: name,
+        points: points,
+        times: times,
+      );
+    } on Object catch (e) {
+      debugPrint('Could not save the run: $e');
+      return null;
+    }
+  }
+
+  /// Writes the points recorded since the last call to the recording's GPX
+  /// file, creating it once there is a track. Does nothing when not
+  /// recording. Never fails: a full or broken disk must not get in the way
+  /// of navigation.
+  Future<void> _syncTrack() => _trackJob = _trackJob.then((_) async {
+    final from = _recFrom;
+    if (from == null || recorded.length - from < 2) return;
+    final points = recorded.sublist(from);
+    final times = recordedTimes.sublist(from);
+    try {
+      final w = _track;
+      if (w == null) {
+        final created = await TrackWriter.create(_runName, points, times);
+        _track = created;
+        // So a rejoin carries on in the same file.
+        if (code != null) settings.setRunData('rec:$code', created.id);
+      } else {
+        await w.append(_runName, points, times);
+      }
+    } on Object catch (e) {
+      debugPrint('Could not save the run: $e');
+    }
+  });
+
+  /// After a rejoin, carries on with the recording made before the app was
+  /// closed, so it stays in one piece. Nothing to do if the runner wasn't
+  /// recording.
+  Future<void> _resumeTrack() async {
+    final id = settings.runData('rec:$code');
+    if (id is! String) return;
+    _recFrom = recorded.length;
+    recordingSince = DateTime.now();
+    // Recording, but closed before there was a file.
+    if (id.isEmpty) return;
+    try {
+      final resumed = await TrackWriter.resume(id);
+      if (resumed == null) return;
+      final (writer, gpx) = resumed;
+      for (var i = 0; i < gpx.track.length; i++) {
+        if (i > 0) {
+          final step = distanceBetween(gpx.track[i - 1], gpx.track[i]);
+          distanceRun += step;
+          recordingDistance += step;
+        }
+        recorded.add(gpx.track[i]);
+        recordedTimes.add(gpx.times[i] ?? startedAt ?? DateTime.now());
+      }
+      recordingSince = gpx.times.nonNulls.firstOrNull ?? recordingSince;
+      _track = writer;
+    } on Object catch (e) {
+      debugPrint('Could not continue the recorded run: $e');
+    }
+  }
+
+  /// The GPX file of this run so far, e.g. to share it: the recording's own
+  /// file while recording, otherwise a temporary copy of the whole track.
+  /// Null until there is a track.
+  Future<File?> trackFile() async {
+    if (isRecording) {
+      await _syncTrack();
+      final w = _track;
+      if (w != null) return w.file;
+    }
+    if (recorded.length < 2) return null;
+    return File('${Directory.systemTemp.path}/ibextrails_run.gpx')
+        .writeAsString(
+          writeGpx(name: _runName, points: recorded, times: recordedTimes),
+        );
+  }
+
+  /// Leave the run, keeping the recording, if any, in My runs. The
+  /// organizer can also [endEvent], which clears the event's data from the
+  /// relay. [safe] tells the organizer the runner is safely off the course,
+  /// so they are counted as accounted for. Returns the saved recording, or
+  /// null if there was none worth keeping.
+  Future<SavedRun?> leave({bool endEvent = false, bool safe = false}) async {
     final r = relay;
     if (r != null && r.isOnline) {
       if (endEvent && isOrganizer) {
@@ -1096,11 +1248,14 @@ class RunSession extends ChangeNotifier {
       // Give the last messages a moment to leave the device.
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
-    settings.activeEvent = null;
+    final saved = await stopRecording();
+    // A solo run mustn't drop a group run waiting to be rejoined.
+    if (isEvent) settings.activeEvent = null;
     await notifier.cancel(NoteId.offRoute);
     await notifier.cancel(NoteId.wrongWay);
     await notifier.cancel(NoteId.fuel);
     dispose();
+    return saved;
   }
 
   @override

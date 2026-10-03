@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/fuel.dart';
 import '../core/protocol.dart';
+import 'map_layers.dart';
 
 /// A relay (MQTT broker) the app can use to exchange encrypted messages.
 class RelayPreset {
@@ -23,14 +24,6 @@ const relayPresets = [
   RelayPreset('HiveMQ public broker', 'broker.hivemq.com', 8883),
   RelayPreset('Mosquitto test broker', 'test.mosquitto.org', 8886),
 ];
-
-enum MapStyle {
-  topo('OpenTopoMap (contours & trails)'),
-  osm('OpenStreetMap');
-
-  const MapStyle(this.label);
-  final String label;
-}
 
 /// The event this device is currently part of, remembered so a run survives
 /// the app being closed or the phone restarting.
@@ -93,10 +86,35 @@ class AppSettings extends ChangeNotifier {
   int get reportSeconds => _prefs.getInt('reportSeconds') ?? 20;
   set reportSeconds(int v) => _set('reportSeconds', v);
 
-  MapStyle get mapStyle =>
-      MapStyle.values.asNameMap()[_prefs.getString('mapStyle')] ??
-      MapStyle.topo;
-  set mapStyle(MapStyle v) => _set('mapStyle', v.name);
+  /// Base map, overlays and the 3D view.
+  MapSetup get mapSetup {
+    final raw = _prefs.getString('mapSetup');
+    if (raw != null) {
+      try {
+        return MapSetup.fromJson(jsonDecode(raw) as Map);
+      } on Object {
+        // Fall through to the default.
+      }
+    }
+    // Earlier versions had a single map style.
+    return switch (_prefs.getString('mapStyle')) {
+      'osm' => const MapSetup(baseId: 'osm'),
+      _ => const MapSetup(),
+    };
+  }
+
+  set mapSetup(MapSetup v) => _set('mapSetup', v.encode());
+
+  /// The runner's own key for a paid map provider. It is only ever sent to
+  /// that provider.
+  String mapKey(MapProvider p) =>
+      p.needsKey ? _prefs.getString('mapKey:${p.name}') ?? '' : '';
+  void setMapKey(MapProvider p, String key) =>
+      _set('mapKey:${p.name}', key.trim());
+
+  /// [mapSetup] with keys applied; layers missing a key fall back to free
+  /// ones.
+  ResolvedMap get resolvedMap => ResolvedMap.of(mapSetup, mapKey);
 
   /// Buzz before turns in the route.
   bool get turnWarnings => _prefs.getBool('turnWarnings') ?? true;
