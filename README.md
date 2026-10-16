@@ -43,10 +43,18 @@ the map background is blank. On a phone you see the map layers you picked.)*
   and with the screen off. The next turn also shows under the stats. It
   helps you avoid a wrong turn instead of only warning you afterwards.
 - **Off-route alarm.** If you drift more than 50 m (you can change this) from
-  the trail, the phone vibrates and shows a notification, even in your pocket
+  the trail, the phone sounds the alarm and vibrates, even in your pocket
   with the screen off. It also tells you which direction the trail is (e.g.
   "The route is to the SSE"), and a dashed line on the map leads you back.
 - **Wrong-way alarm.** Warns you when you start running back along the route.
+- **Alarms you can't miss, and can tell apart.** Each kind has its own sound,
+  nothing like a normal notification: fast beeps for off route, wrong way,
+  cut-offs and messages, a siren when someone in the group presses SOS, and a
+  chime for fuel reminders. On Android they play at full alarm volume, even
+  with the phone on silent or vibrate, and the volume goes back to where it
+  was afterwards. iPhones don't let apps turn the volume up, so there they
+  play at the media volume, even on silent: turn it up before you run. Hear
+  them in **Settings → Alarm sounds**.
 - **Progress.** Shows distance done and to go, climbing left, the next waypoint
   ("Water in 2.3 km"), and an elevation profile with your position on it.
 - **Works without mobile data.** The route and navigation run entirely on the
@@ -64,7 +72,7 @@ the map background is blank. On a phone you see the map layers you picked.)*
   the flat), so they stay realistic on hilly courses.
 - **Fuelling reminders.** Set a carb target (e.g. 60 g per hour) and a fluid
   target, and list what you carry: gels, chews, dates, drinks, with the carbs
-  from their labels. The phone buzzes when it's time, saying how much and
+  from their labels. A chime plays when it's time, saying how much and
   what to eat ("25 g carbs: 1 × Energy gel"). **Ate it** / **In 5 min**
   buttons work from the lock screen. Falling behind? The next reminder asks
   for a bit more, capped so you don't overload your gut. If an aid station is
@@ -191,7 +199,7 @@ flutter build apk --release # Android APK
    screen.
 
 Tip: do a short test loop around the block first. Walk 60–70 m off the route to
-feel the alarm.
+hear the alarm.
 
 ## Limitations
 
@@ -253,6 +261,8 @@ test/
   core/        unit tests
   integration/ end-to-end group run over a real MQTT broker
   screenshots/ renders the main screens to PNG
+  tool/        renders the app icon; synthesizes the alarm sounds into
+               android/app/src/main/res/raw/ and ios/Runner/Sounds/
 ```
 
 ```sh
@@ -263,6 +273,7 @@ mosquitto -p 18830 -d                            # local broker, or with Docker:
 IBEX_TEST_BROKER=127.0.0.1:18830 flutter test test/integration
 IBEX_TEST_BROKER=127.0.0.1:18830 IBEX_SCREENSHOTS=/tmp/shots \
   flutter test test/screenshots
+IBEX_WRITE_SOUNDS=1 flutter test test/tool/alarm_sounds_test.dart  # alarm sounds
 ```
 
 The route matcher (`lib/core/route_matcher.dart`) is the heart of the

@@ -22,6 +22,7 @@ import '../core/route.dart';
 import '../core/route_matcher.dart';
 import '../core/run_stats.dart';
 import '../core/turns.dart';
+import '../services/alarm_audio.dart';
 import '../services/location_service.dart';
 import '../services/notifications.dart';
 import '../services/relay_client.dart';
@@ -1017,6 +1018,7 @@ class RunSession extends ChangeNotifier {
           NoteId.group(a.key),
           '${a.participant.name}: ${a.kind.label}',
           a.detail,
+          sound: a.kind == AlertKind.sos ? AlarmSound.sos : AlarmSound.alarm,
         );
       }
     } else {
@@ -1028,6 +1030,7 @@ class RunSession extends ChangeNotifier {
           NoteId.group(a.key),
           '${a.participant.name}: SOS',
           'A group member needs help.',
+          sound: AlarmSound.sos,
         );
       }
     }
