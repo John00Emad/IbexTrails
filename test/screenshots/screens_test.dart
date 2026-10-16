@@ -23,15 +23,21 @@ import 'package:ibex_trails/core/geo.dart';
 import 'package:ibex_trails/core/gpx.dart';
 import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/core/route.dart';
+import 'package:ibex_trails/services/map_layers.dart';
 import 'package:ibex_trails/services/notifications.dart';
 import 'package:ibex_trails/services/relay_client.dart';
+import 'package:ibex_trails/services/route_library.dart';
+import 'package:ibex_trails/services/run_library.dart';
 import 'package:ibex_trails/services/settings.dart';
 import 'package:ibex_trails/state/run_session.dart';
 import 'package:ibex_trails/ui/course_editor_screen.dart';
 import 'package:ibex_trails/ui/course_picker.dart';
 import 'package:ibex_trails/ui/group_sheet.dart';
 import 'package:ibex_trails/ui/home_screen.dart';
+import 'package:ibex_trails/ui/layers_sheet.dart';
+import 'package:ibex_trails/ui/run_detail_screen.dart';
 import 'package:ibex_trails/ui/run_screen.dart';
+import 'package:ibex_trails/ui/runs_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers.dart';
@@ -109,6 +115,53 @@ TrailRoute _demoRoute() {
   );
 }
 
+/// A flat loop of [radius] metres.
+TrailRoute _circle(double radius) => TrailRoute.fromPoints('Loop', [
+  for (var a = 0.0; a <= 360; a += 5)
+    offset(
+      -2000 + radius * math.sin(a * math.pi / 180),
+      radius * (1 - math.cos(a * math.pi / 180)),
+      120,
+    ),
+]);
+
+/// Saves a run along [route] in My runs: [secondsPerKm] on the flat, and
+/// slower uphill.
+Future<SavedRun?> _record(
+  String name,
+  TrailRoute route,
+  DateTime start,
+  double secondsPerKm,
+) async {
+  final pts = <GeoPoint>[];
+  final times = <DateTime>[];
+  var t = start;
+  for (var a = 0.0; a <= route.length; a += 20) {
+    final p = route.pointAt(a);
+    if (pts.isNotEmpty) {
+      final climb = math.max(0.0, (p.ele ?? 0) - (pts.last.ele ?? 0));
+      t = t.add(
+        Duration(milliseconds: (20 * secondsPerKm + 2000 * climb).round()),
+      );
+    }
+    pts.add(p);
+    times.add(t);
+  }
+  final w = await TrackWriter.create(name, pts, times);
+  return RunLibrary.finish(w.file, name: name, points: pts, times: times);
+}
+
+/// Lets file and isolate work started by a screen finish: widget tests
+/// otherwise run on fake time.
+Future<void> _settleIo(WidgetTester tester) async {
+  for (var i = 0; i < 40; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 25)),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+}
+
 Future<void> _shot(WidgetTester tester, GlobalKey key, String name) async {
   for (var i = 0; i < 5; i++) {
     await tester.pump(const Duration(milliseconds: 100));
@@ -141,6 +194,11 @@ void main() {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       const MethodChannel('plugins.flutter.io/path_provider'),
       (call) async => tmp.path,
+    );
+    // The run screen releases the wake lock when it closes.
+    tester.binding.defaultBinaryMessenger.setMockMessageHandler(
+      'dev.flutter.pigeon.wakelock_plus_platform_interface.WakelockPlusApi.toggle',
+      (_) async => const StandardMessageCodec().encodeMessage(<Object?>[null]),
     );
     tester.view.physicalSize = const Size(393 * 2.5, 852 * 2.5);
     tester.view.devicePixelRatio = 2.5;
@@ -376,11 +434,91 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await _shot(tester, key, '12_turn_warning');
 
+    // Map layers, with hillshade on the topo map.
+    settings.mapSetup = const MapSetup(overlays: {'hillshade': 0.4});
+    unawaited(showLayersSheet(ctx, settings));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '13_layers');
+    await tester.tapAt(const Offset(200, 60));
+    await tester.pump(const Duration(seconds: 1));
+    settings.mapSetup = const MapSetup();
+
+    // My runs, and the summary of one of them, in a folder of their own.
+    final runs = Directory('${tmp.path}/my_runs')..createSync();
+    RunLibrary.debugDirectory = runs;
+    addTearDown(() => RunLibrary.debugDirectory = null);
+    final longRun = (await tester.runAsync(() async {
+      await _record('Morning run', _circle(700), DateTime(2026, 9, 27, 6), 345);
+      await _record(
+        'Wadi Degla tempo',
+        short.route,
+        DateTime(2026, 9, 30, 6, 30),
+        300,
+      );
+      return _record(
+        'Sunday long run',
+        shared,
+        DateTime(2026, 10, 3, 6, 10),
+        330,
+      );
+    }))!;
+    await tester.pumpWidget(app(const RunsScreen()));
+    await _settleIo(tester);
+    await _shot(tester, key, '14_my_runs');
+    await tester.pumpWidget(app(RunDetailScreen(run: longRun)));
+    await _settleIo(tester);
+    await _shot(tester, key, '15_run_summary');
+
+    // Run solo: just run, or pick a saved route to follow.
+    await tester.runAsync(() async {
+      await RouteLibrary.import(
+        writeGpx(name: 'Wadi Degla loop', points: route.points),
+      );
+      await RouteLibrary.import(
+        writeGpx(name: 'Sunday long run', points: shared.points),
+      );
+    });
+    // Not the organizer's event from above.
+    settings.activeEvent = null;
+    await tester.pumpWidget(app(const HomeScreen()));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('Run solo'));
+    await _settleIo(tester);
+    await _shot(tester, key, '16_run_solo');
+    await tester.tapAt(const Offset(200, 60));
+    await tester.pump(const Duration(seconds: 1));
+
+    // A solo run without a route, being recorded.
+    final soloGps = StreamController<Position>();
+    final solo = (await tester.runAsync(
+      () => RunSession.solo(
+        settings,
+        notifier,
+        locationSource: () => soloGps.stream,
+      ),
+    ))!;
+    solo.startRecording();
+    await tester.runAsync(() async {
+      for (var a = 0.0; a <= 2400; a += 40) {
+        soloGps.add(_fix(shared.pointAt(a)));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    final now = DateTime.now();
+    solo
+      ..startedAt = now.subtract(const Duration(minutes: 14, seconds: 7))
+      ..recordingSince = now.subtract(const Duration(minutes: 13, seconds: 42));
+    await tester.pumpWidget(app(RunScreen(session: solo)));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '17_recording');
+
     await tester.pumpWidget(const SizedBox());
     debugDisableShadows = true;
     await tester.runAsync(() async {
       session.dispose();
+      solo.dispose();
       await gps.close();
+      await soloGps.close();
     });
   });
 }

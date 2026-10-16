@@ -36,7 +36,7 @@ class TrailRoute {
   TrailRoute._(this.name, this.points, this.waypoints)
     : cumDist = _cumulativeDistance(points),
       hasElevation = points.every((p) => p.ele != null) {
-    final (asc, desc) = _cumulativeClimb(points);
+    final (asc, desc) = cumulativeClimb(points);
     cumAscent = asc;
     cumDescent = desc;
   }
@@ -103,6 +103,9 @@ class TrailRoute {
     ];
     return TrailRoute._(name, route.points, List.unmodifiable(placed));
   }
+
+  /// The same route under another [name].
+  TrailRoute renamed(String name) => TrailRoute._(name, points, waypoints);
 
   final String name;
   final List<GeoPoint> points;
@@ -303,9 +306,9 @@ List<double> _cumulativeDistance(List<GeoPoint> pts) {
   return out;
 }
 
-/// Ascent/descent with a hysteresis threshold so GPS elevation noise does not
-/// add up to phantom climbing.
-(List<double>, List<double>) _cumulativeClimb(
+/// Cumulative ascent/descent to each point, with a hysteresis threshold so
+/// GPS elevation noise does not add up to phantom climbing.
+(List<double>, List<double>) cumulativeClimb(
   List<GeoPoint> pts, {
   double threshold = 4,
 }) {

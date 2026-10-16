@@ -70,5 +70,46 @@ void main() {
     final gpx = parseGpx(xml);
     expect(gpx.name, 'Recorded');
     expect(gpx.track, const [GeoPoint(1, 2, 3), GeoPoint(1.001, 2, 4)]);
+    expect(gpx.times, [DateTime.utc(2026), DateTime.utc(2026, 1, 1, 0, 0, 5)]);
+  });
+
+  test('keeps each point\'s time, dropping it with a duplicate point', () {
+    expect(parseGpx(_gpx11).times, [DateTime.utc(2026, 1, 1, 6), null, null]);
+    expect(parseGpx(_gpx10Route).times, [null, null]);
+  });
+
+  const pts = [
+    GeoPoint(30, 31, 100),
+    GeoPoint(30.001, 31, 104.5),
+    GeoPoint(30.002, 31.001),
+  ];
+  final times = [
+    DateTime.utc(2026, 10, 3, 6),
+    DateTime.utc(2026, 10, 3, 6, 0, 4),
+    DateTime.utc(2026, 10, 3, 6, 0, 9),
+  ];
+
+  test('a recording written piece by piece is the same as writeGpx', () {
+    const name = 'Wadi & <Hof>';
+    final pieces =
+        gpxHeader(name, time: times.first) +
+        gpxTrackPoints(pts.sublist(0, 2), times.sublist(0, 2)) +
+        gpxTrackPoints(pts.sublist(2), times.sublist(2)) +
+        gpxFooter;
+    expect(pieces, writeGpx(name: name, points: pts, times: times));
+    final gpx = parseGpx(pieces);
+    expect(gpx.name, name);
+    expect(gpx.track, pts);
+    expect(gpx.times, times);
+  });
+
+  test('a file cut off mid-write is mended up to its last whole point', () {
+    final full = writeGpx(name: 'Cut', points: pts, times: times);
+    final cut = full.substring(0, full.lastIndexOf('<trkpt') + 20);
+    expect(() => parseGpx(cut), throwsA(isA<GpxFormatException>()));
+    final gpx = parseGpx(repairGpx(cut)!);
+    expect(gpx.name, 'Cut');
+    expect(gpx.track, pts.sublist(0, 2));
+    expect(repairGpx('<gpx><metadata><name>No track'), isNull);
   });
 }

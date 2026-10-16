@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../brand.dart';
 import '../core/event_code.dart';
-import '../core/route.dart';
 import '../services/settings.dart';
 import '../state/run_session.dart';
 import 'fuel_plan_screen.dart';
@@ -11,6 +10,7 @@ import 'join_screen.dart';
 import 'organize_screen.dart';
 import 'route_picker.dart';
 import 'run_screen.dart';
+import 'runs_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -26,30 +26,19 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openRun(Future<RunSession> Function() start) async {
     setState(() => _busy = true);
     try {
-      final session = await start();
-      if (!mounted) {
-        session.dispose();
-        return;
-      }
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => RunScreen(session: session)),
-      );
-    } on Object catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Could not start: $e')));
-      }
+      await openRun(context, start);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
+  /// A run on your own, following a route or just running.
   Future<void> _solo() async {
     final app = AppScope.of(context);
-    final TrailRoute? route = await pickRoute(context);
-    if (route == null || !mounted) return;
+    final choice = await pickSoloRoute(context);
+    if (choice == null || !mounted) return;
     await _openRun(
-      () => RunSession.solo(app.settings, app.notifier, route: route),
+      () => RunSession.solo(app.settings, app.notifier, route: choice.route),
     );
   }
 
@@ -169,11 +158,29 @@ class _HomeScreenState extends State<HomeScreen> {
                     _ActionCard(
                       icon: Icons.explore_outlined,
                       color: Brand.night,
-                      title: 'Navigate solo',
+                      title: 'Run solo',
                       subtitle:
-                          'Follow a GPX route with off-route and '
-                          'wrong-way alerts. No mobile data needed.',
+                          'Just run, or follow a GPX route with off-route '
+                          'and wrong-way alerts. No mobile data needed.',
                       onTap: _busy ? null : _solo,
+                    ),
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.history, color: Brand.canyon),
+                        title: const Text(
+                          'My runs',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        subtitle: const Text(
+                          'Your recorded runs, saved as GPX on this phone',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const RunsScreen(),
+                          ),
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     const _WadiChecklist(),

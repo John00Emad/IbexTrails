@@ -28,6 +28,7 @@ dependencies:
   flutter_tts: ^4.2.5
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.4.2
+  webview_flutter: ^4.14.1
 
 dev_dependencies:
   flutter_test:
@@ -36,6 +37,11 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # 3D terrain view: MapLibre GL JS page, served by lib/services/tile_proxy.dart.
+    - assets/map3d/
+    - assets/map3d/vendor/
+    - assets/map3d/glyphs/noto-sans-regular/
   fonts:
     # Cairo: Latin + Arabic, SIL OFL (assets/fonts/OFL.txt).
     - family: Cairo

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../brand.dart';
 import '../core/geo.dart';
 import '../core/gpx.dart';
 import '../core/route.dart';
@@ -26,18 +27,40 @@ Future<TrailRoute?> importGpxFile(BuildContext context) async {
   return null;
 }
 
+/// What was picked in the route sheet: a route to follow, or none.
+class RouteChoice {
+  const RouteChoice(this.route);
+
+  /// Null to run without a route.
+  final TrailRoute? route;
+}
+
 /// Bottom sheet: import a new GPX file or choose a saved route.
-Future<TrailRoute?> pickRoute(BuildContext context) {
-  return showModalBottomSheet<TrailRoute>(
+Future<TrailRoute?> pickRoute(BuildContext context) async =>
+    (await _showRouteSheet(context, offerNoRoute: false))?.route;
+
+/// The route sheet for a solo run, which can also go without a route,
+/// like a group run before the organizer shares one. Null if dismissed.
+Future<RouteChoice?> pickSoloRoute(BuildContext context) =>
+    _showRouteSheet(context, offerNoRoute: true);
+
+Future<RouteChoice?> _showRouteSheet(
+  BuildContext context, {
+  required bool offerNoRoute,
+}) {
+  return showModalBottomSheet<RouteChoice>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (context) => const _RoutePickerSheet(),
+    builder: (context) => _RoutePickerSheet(offerNoRoute: offerNoRoute),
   );
 }
 
 class _RoutePickerSheet extends StatefulWidget {
-  const _RoutePickerSheet();
+  const _RoutePickerSheet({required this.offerNoRoute});
+
+  /// Offers "Just run" first.
+  final bool offerNoRoute;
 
   @override
   State<_RoutePickerSheet> createState() => _RoutePickerSheetState();
@@ -52,14 +75,14 @@ class _RoutePickerSheetState extends State<_RoutePickerSheet> {
     final route = await importGpxFile(context);
     if (!mounted) return;
     setState(() => _busy = false);
-    if (route != null) Navigator.pop(context, route);
+    if (route != null) Navigator.pop(context, RouteChoice(route));
   }
 
   Future<void> _open(SavedRoute s) async {
     setState(() => _busy = true);
     try {
       final route = await RouteLibrary.load(s);
-      if (mounted) Navigator.pop(context, route);
+      if (mounted) Navigator.pop(context, RouteChoice(route));
     } on Object catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -84,6 +107,41 @@ class _RoutePickerSheetState extends State<_RoutePickerSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (widget.offerNoRoute) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                child: Card(
+                  margin: EdgeInsets.zero,
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.fromLTRB(16, 6, 12, 6),
+                    leading: const Icon(
+                      Icons.directions_run,
+                      color: Brand.ember,
+                      size: 32,
+                    ),
+                    title: const Text(
+                      'Just run – no route',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: const Text(
+                      'Map, distance, pace and climb. Load a route later '
+                      'from the menu.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _busy
+                        ? null
+                        : () => Navigator.pop(context, const RouteChoice(null)),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Text(
+                  'Or follow a GPX route',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+            ],
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: FilledButton.icon(

@@ -9,12 +9,40 @@ import '../brand.dart';
 import '../core/geo.dart';
 import '../core/route.dart';
 import '../core/turns.dart';
+import '../services/map_layers.dart';
 import '../services/map_tiles.dart';
-import '../services/settings.dart';
 import '../state/run_session.dart';
 import 'status_style.dart';
 
 LatLng ll(GeoPoint p) => LatLng(p.lat, p.lon);
+
+/// Room left around the route when fitting it on screen, clear of the
+/// banners at the top and the stats panel and buttons at the bottom.
+const mapFitPadding = EdgeInsets.fromLTRB(40, 140, 40, 260);
+
+/// Moves a map's camera. Both the flat and the 3D map implement it, so the
+/// run screen doesn't care which one is showing.
+abstract interface class TrailMapCamera {
+  void fitBounds(GeoPoint sw, GeoPoint ne);
+  void centerOn(GeoPoint p, {double minZoom = 15});
+}
+
+class FlatMapCamera implements TrailMapCamera {
+  FlatMapCamera(this.controller);
+  final MapController controller;
+
+  @override
+  void fitBounds(GeoPoint sw, GeoPoint ne) => controller.fitCamera(
+    CameraFit.bounds(
+      bounds: LatLngBounds(ll(sw), ll(ne)),
+      padding: mapFitPadding,
+    ),
+  );
+
+  @override
+  void centerOn(GeoPoint p, {double minZoom = 15}) =>
+      controller.move(ll(p), math.max(controller.camera.zoom, minZoom));
+}
 
 /// The live map: route, waypoints, you, and everyone else in the event.
 class TrailMap extends StatefulWidget {
@@ -22,7 +50,7 @@ class TrailMap extends StatefulWidget {
     super.key,
     required this.session,
     required this.controller,
-    required this.style,
+    required this.map,
     required this.follow,
     required this.onFollowChanged,
     this.selected,
@@ -31,7 +59,9 @@ class TrailMap extends StatefulWidget {
 
   final RunSession session;
   final MapController controller;
-  final MapStyle style;
+
+  /// Base map and overlays to draw.
+  final ResolvedMap map;
   final bool follow;
   final ValueChanged<bool> onFollowChanged;
 
@@ -126,7 +156,7 @@ class _TrailMapState extends State<TrailMap> {
       final (sw, ne) = route.bounds;
       fit = CameraFit.bounds(
         bounds: LatLngBounds(ll(sw), ll(ne)),
-        padding: const EdgeInsets.fromLTRB(40, 140, 40, 260),
+        padding: mapFitPadding,
         maxZoom: 16,
       );
     }
@@ -158,9 +188,10 @@ class _TrailMapState extends State<TrailMap> {
     final match = s.match;
     final f = s.fix;
     final now = DateTime.now();
-    final src = tileSourceFor(widget.style);
-
-    final layers = <Widget>[MapTiles.layer(widget.style)];
+    final layers = <Widget>[
+      for (final (l, opacity) in widget.map.layers2d)
+        MapTiles.layer(l, opacity: opacity, key: widget.map.keyFor(l)),
+    ];
 
     // Route: already-run part greyed, remaining part in trail orange.
     if (route != null) {
@@ -318,14 +349,14 @@ class _TrailMapState extends State<TrailMap> {
               point: ll(route.start),
               width: 30,
               height: 30,
-              child: const _RoundIcon(Icons.flag, TrailColors.ok),
+              child: const RoundIcon(Icons.flag, TrailColors.ok),
             ),
             if (!route.isLoop)
               Marker(
                 point: ll(route.finish),
                 width: 30,
                 height: 30,
-                child: const _RoundIcon(Icons.sports_score, Colors.black87),
+                child: const RoundIcon(Icons.sports_score, Colors.black87),
               ),
           ],
         ),
@@ -399,7 +430,7 @@ class _TrailMapState extends State<TrailMap> {
         length: ScalebarLength.s,
       ),
     );
-    layers.add(_Attribution(src.attribution));
+    layers.add(MapAttribution(widget.map.attribution(in3d: false)));
 
     return FlutterMap(
       mapController: widget.controller,
@@ -411,8 +442,8 @@ class _TrailMapState extends State<TrailMap> {
 
 /// Compact attribution that wraps instead of overflowing on narrow phones
 /// and stays clear of the map buttons on the right.
-class _Attribution extends StatelessWidget {
-  const _Attribution(this.text);
+class MapAttribution extends StatelessWidget {
+  const MapAttribution(this.text, {super.key});
   final String text;
 
   @override
@@ -438,8 +469,9 @@ class _Attribution extends StatelessWidget {
   }
 }
 
-class _RoundIcon extends StatelessWidget {
-  const _RoundIcon(this.icon, this.color);
+/// A white-ringed round map marker, e.g. the start flag.
+class RoundIcon extends StatelessWidget {
+  const RoundIcon(this.icon, this.color, {super.key});
   final IconData icon;
   final Color color;
 

@@ -58,16 +58,6 @@ class RouteLibrary {
 
   static Future<void> delete(SavedRoute saved) => saved.file.delete();
 
-  /// Saves a recorded run as GPX and returns the file.
-  static Future<File> saveRecording(String name, String gpxText) async {
-    final base = await getApplicationDocumentsDirectory();
-    final dir = Directory('${base.path}/recordings');
-    if (!await dir.exists()) await dir.create(recursive: true);
-    final stamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final file = File('${dir.path}/run_${stamp.substring(0, 19)}.gpx');
-    return file.writeAsString(gpxText);
-  }
-
   static String _displayName(File f) {
     final base = f.uri.pathSegments.last;
     final noExt = _stripExtension(base)!;

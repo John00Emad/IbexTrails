@@ -56,6 +56,12 @@
 		<string>location</string>
 		<string>audio</string>
 	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- The 3D map page is served by the app itself on 127.0.0.1. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>IbexTrails uses the camera to scan the event QR code on the organizer's phone.</string>
 	<key>LSApplicationQueriesSchemes</key>
@@ -63,6 +69,10 @@
 		<string>tel</string>
 		<string>sms</string>
 	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
