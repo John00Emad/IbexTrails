@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The alarm sounds are only referenced by name, from the notification
+     channels (lib/services/alarm_audio.dart), so the release build's resource
+     shrinker would otherwise drop them. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/ibex_alarm,@raw/ibex_fuel,@raw/ibex_sos" />

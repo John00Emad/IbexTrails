@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app.dart';
+import '../services/alarm_audio.dart';
 import '../services/settings.dart';
 import 'fuel_plan_screen.dart';
 import 'layers_sheet.dart';
@@ -147,6 +148,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 MaterialPageRoute<void>(builder: (_) => const FuelPlanScreen()),
               ),
             ),
+            _Section('Alarm sounds'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+              child: Text(
+                theme.platform == TargetPlatform.iOS
+                    ? 'Each alert has its own sound, played even on silent. '
+                          'iPhones don\'t let apps raise the volume, so turn '
+                          'it up before you run. Tap one to hear it.'
+                    : 'Each alert has its own sound, played at full alarm '
+                          'volume, even on silent or vibrate. Tap one to '
+                          'hear it.',
+              ),
+            ),
+            for (final sound in AlarmSound.values)
+              ListTile(
+                leading: Icon(switch (sound) {
+                  AlarmSound.fuel => Icons.bolt,
+                  AlarmSound.alarm => Icons.warning_amber,
+                  AlarmSound.sos => Icons.sos,
+                }),
+                title: Text(sound.label),
+                subtitle: Text(sound.meaning),
+                trailing: const Icon(Icons.play_circle_outline),
+                onTap: () => AppScope.of(context).notifier.preview(sound),
+              ),
             _Section('Group tracking'),
             ListTile(
               title: const Text('Send my position every'),

@@ -17,6 +17,7 @@ import 'package:ibex_trails/core/geo.dart';
 import 'package:ibex_trails/core/group.dart';
 import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/core/route.dart';
+import 'package:ibex_trails/services/alarm_audio.dart';
 import 'package:ibex_trails/services/notifications.dart';
 import 'package:ibex_trails/services/relay_client.dart';
 import 'package:ibex_trails/services/run_library.dart';
@@ -52,6 +53,21 @@ Future<void> waitFor(
       fail('Timed out waiting for ${what ?? 'condition'}');
     }
     await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+}
+
+/// Remembers which sound each alert played, by title.
+class RecordingNotifier extends Notifier {
+  final sounds = <String, AlarmSound>{};
+
+  @override
+  Future<void> alert(
+    int id,
+    String title,
+    String body, {
+    AlarmSound sound = AlarmSound.alarm,
+  }) async {
+    sounds[title] = sound;
   }
 }
 
@@ -160,9 +176,10 @@ void main() {
           ),
         ],
       );
+      final notifier = RecordingNotifier();
       final org = await RunSession.organize(
         settings,
-        Notifier(),
+        notifier,
         eventName: 'Sunday long run',
         courses: [course],
         locationSource: () => gps.stream,
@@ -236,6 +253,16 @@ void main() {
       );
       expect(missed.participant.name, 'Rami');
       expect(missed.detail, startsWith('Bridge closed at'));
+      // Each with its own sound: a siren for SOS.
+      await waitFor(
+        () => notifier.sounds.containsKey('Rami: Missed cut-off'),
+        what: 'cut-off notification',
+      );
+      expect(notifier.sounds, containsPair('Sara: SOS', AlarmSound.sos));
+      expect(
+        notifier.sounds,
+        containsPair('Rami: Missed cut-off', AlarmSound.alarm),
+      );
 
       // The organizer's own report reaches the others.
       await waitFor(
@@ -346,9 +373,10 @@ void main() {
       }
 
       final gps = StreamController<Position>();
+      final notifier = RecordingNotifier();
       final me = await RunSession.join(
         settings,
-        Notifier(),
+        notifier,
         code: code.toLowerCase(),
         role: Role.runner,
         locationSource: () => gps.stream,
@@ -415,6 +443,33 @@ void main() {
         () => me.announcement?.text == 'Wait at the hut',
         what: 'announcement',
       );
+
+      // Another runner presses SOS: everyone hears the siren.
+      final there = offset(0, 2000);
+      await organizer.send(
+        organizer.topics.position('r2'),
+        PositionReport(
+          id: 'r2',
+          name: 'Sara',
+          role: Role.runner,
+          time: DateTime.now(),
+          lat: there.lat,
+          lon: there.lon,
+          status: RunnerStatus.sos,
+          along: 2000,
+          course: 'c4',
+        ).toJson(),
+      );
+      await waitFor(
+        () => notifier.sounds.containsKey('Sara: SOS'),
+        what: 'SOS notification',
+      );
+      expect(notifier.sounds, containsPair('Off route', AlarmSound.alarm));
+      expect(
+        notifier.sounds,
+        containsPair('Message from Olga', AlarmSound.alarm),
+      );
+      expect(notifier.sounds, containsPair('Sara: SOS', AlarmSound.sos));
 
       // The recording is kept in My runs under the event's name.
       final saved = await me.leave();
