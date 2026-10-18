@@ -5,6 +5,7 @@ import '../services/alarm_audio.dart';
 import '../services/settings.dart';
 import 'fuel_plan_screen.dart';
 import 'layers_sheet.dart';
+import 'pacer_plan_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -132,6 +133,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               subtitle: Text(describeMapSetup(s)),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => showLayersSheet(context, s),
+            ),
+            _Section('Pacing'),
+            ListTile(
+              leading: const Icon(Icons.speed),
+              title: const Text('Virtual pacer'),
+              subtitle: Text(describePacer(s.pacerPlan)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const PacerPlanScreen(),
+                ),
+              ),
             ),
             _Section('Fuelling'),
             ListTile(

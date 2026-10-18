@@ -24,6 +24,10 @@ built with Flutter.
 |---|---|---|---|
 | ![Run solo](docs/screenshots/16_run_solo.png) | ![Recording](docs/screenshots/17_recording.png) | ![My runs](docs/screenshots/14_my_runs.png) | ![Run summary](docs/screenshots/15_run_summary.png) |
 
+| Virtual pacer | Pacer details | Your pace range |
+|---|---|---|
+| ![Virtual pacer on the run screen](docs/screenshots/18_pacer.png) | ![Pacer sheet](docs/screenshots/19_pacer_sheet.png) | ![Pace range settings](docs/screenshots/20_pacer_plan.png) |
+
 *(Screens rendered in the test harness, where map tiles are not downloaded, so
 the map background is blank. On a phone you see the map layers you picked.)*
 
@@ -70,6 +74,19 @@ the map background is blank. On a phone you see the map layers you picked.)*
   you when your pace puts you behind a cut-off. Arrival times use
   **km-effort** (the ITRA measure where 100 m of climbing counts as 1 km on
   the flat), so they stay realistic on hilly courses.
+- **Virtual pacer.** Set the pace range you want to hold in a race (say
+  5:30–6:30 per km), and a virtual pacer runs with you at the middle of it.
+  Under the map you see your pace, whether you're **on pace**, **too fast**
+  or **too slow**, and how far ahead of the pacer you are ("+2:04"); the
+  pacer is on the map and the elevation profile too. Drift out of the range
+  for 15 seconds and the phone buzzes and tells you ("Too slow: 7 minutes 5
+  seconds per kilometre. Pick it up."), even with the screen off, then
+  reminds you every 3 minutes until you're back on pace. Your pace is
+  averaged over the last minute, so overtaking someone doesn't set it off,
+  and the pacer keeps quiet while you stop, near turns and off route. On a
+  route with elevation, climbs get more time (km-effort). The pacer sets off
+  when you start running, or at the race start if the organizer set one; tap
+  the pacer line to restart it from where you are.
 - **Fuelling reminders.** Set a carb target (e.g. 60 g per hour) and a fluid
   target, and list what you carry: gels, chews, dates, drinks, with the carbs
   from their labels. A chime plays when it's time, saying how much and
@@ -187,7 +204,8 @@ flutter build apk --release # Android APK
 2. **Everyone else:** *Join a group run* → scan the organizer's QR code (or
    paste the code) → enter your name →
    *Runner* or *Sweeper*. Pick your distance; the route appears
-   automatically. Set your **Fuel plan** (home screen) before the start.
+   automatically. Set your **Fuel plan** and **Virtual pacer** (home screen)
+   before the start.
 3. **Before leaving coverage:** menu → *Save map for offline*.
 4. **Android phones:** when asked, allow location *while using the app* and
    allow notifications. On Xiaomi, Huawei, Samsung and similar phones, also set

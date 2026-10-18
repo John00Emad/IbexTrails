@@ -21,6 +21,7 @@ import 'package:ibex_trails/core/crypto.dart';
 import 'package:ibex_trails/core/fuel.dart';
 import 'package:ibex_trails/core/geo.dart';
 import 'package:ibex_trails/core/gpx.dart';
+import 'package:ibex_trails/core/pacer.dart';
 import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/core/route.dart';
 import 'package:ibex_trails/services/map_layers.dart';
@@ -35,6 +36,7 @@ import 'package:ibex_trails/ui/course_picker.dart';
 import 'package:ibex_trails/ui/group_sheet.dart';
 import 'package:ibex_trails/ui/home_screen.dart';
 import 'package:ibex_trails/ui/layers_sheet.dart';
+import 'package:ibex_trails/ui/pacer_plan_screen.dart';
 import 'package:ibex_trails/ui/run_detail_screen.dart';
 import 'package:ibex_trails/ui/run_screen.dart';
 import 'package:ibex_trails/ui/runs_screen.dart';
@@ -512,13 +514,69 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await _shot(tester, key, '17_recording');
 
+    // The virtual pacer: a 5:30–6:30 range, run at 5:35 for 5 km round a
+    // loop, so the pacer (at 6:00) is a few hundred metres behind.
+    settings.pacerPlan = const PacerPlan(
+      enabled: true,
+      fastest: 330,
+      slowest: 390,
+    );
+    final loop = _circle(1100);
+    final pacedGps = StreamController<Position>();
+    final paced = (await tester.runAsync(
+      () => RunSession.solo(
+        settings,
+        notifier,
+        route: loop,
+        locationSource: () => pacedGps.stream,
+      ),
+    ))!;
+    final ran = DateTime.now();
+    await tester.runAsync(() async {
+      const pace = 335.0;
+      var t = ran.subtract(const Duration(seconds: 5000 * pace ~/ 1000));
+      for (var a = 0.0; a <= 5000; a += 2000 / pace) {
+        t = t.add(const Duration(seconds: 2));
+        final p = loop.pointAt(a);
+        pacedGps.add(
+          Position(
+            latitude: p.lat,
+            longitude: p.lon,
+            timestamp: t,
+            accuracy: 5,
+            altitude: p.ele ?? 0,
+            altitudeAccuracy: 5,
+            heading: bearingBetween(p, loop.pointAt(a + 10)),
+            headingAccuracy: 10,
+            speed: 1000 / pace,
+            speedAccuracy: 1,
+          ),
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    paced.startedAt = ran.subtract(const Duration(minutes: 27, seconds: 55));
+    await tester.pumpWidget(app(RunScreen(session: paced)));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '18_pacer');
+    await tester.tap(find.textContaining('On pace'));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '19_pacer_sheet');
+    await tester.tapAt(const Offset(200, 60));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpWidget(app(const PacerPlanScreen()));
+    await tester.pump(const Duration(seconds: 1));
+    await _shot(tester, key, '20_pacer_plan');
+
     await tester.pumpWidget(const SizedBox());
     debugDisableShadows = true;
     await tester.runAsync(() async {
       session.dispose();
       solo.dispose();
+      paced.dispose();
       await gps.close();
       await soloGps.close();
+      await pacedGps.close();
     });
   });
 }

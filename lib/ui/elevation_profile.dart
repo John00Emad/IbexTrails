@@ -13,14 +13,16 @@ class ProfileMarker {
 }
 
 /// Elevation profile of the route with your position and, optionally, other
-/// people's positions along it. Without elevation data it degrades to a
-/// progress bar, which still shows how spread out the group is.
+/// people's and the virtual pacer's positions along it. Without elevation
+/// data it degrades to a progress bar, which still shows how spread out the
+/// group is.
 class ElevationProfile extends StatelessWidget {
   const ElevationProfile({
     super.key,
     required this.route,
     this.along,
     this.others = const [],
+    this.pacer,
     this.ticks,
     this.height = 64,
   });
@@ -28,6 +30,9 @@ class ElevationProfile extends StatelessWidget {
   final TrailRoute route;
   final double? along;
   final List<ProfileMarker> others;
+
+  /// Where the virtual pacer is (m), drawn as a ring.
+  final double? pacer;
 
   /// Distances to mark under the chart (checkpoints). Defaults to the
   /// route's waypoints.
@@ -45,6 +50,7 @@ class ElevationProfile extends StatelessWidget {
           route: route,
           along: along,
           others: others,
+          pacer: pacer,
           ticks: ticks ?? [for (final w in route.waypoints) ...w.passes],
           fill: TrailColors.route.withValues(alpha: 0.25),
           line: TrailColors.route,
@@ -64,6 +70,7 @@ class _ProfilePainter extends CustomPainter {
     required this.route,
     required this.along,
     required this.others,
+    required this.pacer,
     required this.ticks,
     required this.fill,
     required this.line,
@@ -76,6 +83,7 @@ class _ProfilePainter extends CustomPainter {
   final TrailRoute route;
   final double? along;
   final List<ProfileMarker> others;
+  final double? pacer;
 
   /// Distances to mark under the chart (checkpoints). Defaults to the
   /// route's waypoints.
@@ -154,6 +162,11 @@ class _ProfilePainter extends CustomPainter {
       canvas.drawCircle(Offset(x, y), 3.5, Paint()..color = o.color);
     }
 
+    final g = pacer;
+    if (g != null) {
+      _paintPacer(canvas, Offset(xOf(g), yOf(route.elevationAt(g) ?? lo)));
+    }
+
     if (a != null) {
       final x = xOf(a);
       final y = yOf(route.elevationAt(a) ?? lo);
@@ -201,10 +214,25 @@ class _ProfilePainter extends CustomPainter {
         Paint()..color = o.color,
       );
     }
+    final g = pacer;
+    if (g != null) _paintPacer(canvas, Offset(xOf(g), bar.center.dy));
     if (a != null) {
       canvas.drawCircle(Offset(xOf(a), bar.center.dy), 7, Paint()..color = me);
     }
     _label(canvas, '0 km', Offset(0, bar.top - 4));
+  }
+
+  /// A ring, so it reads as nobody in particular.
+  void _paintPacer(Canvas canvas, Offset at) {
+    canvas.drawCircle(at, 5.5, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      at,
+      5.5,
+      Paint()
+        ..color = TrailColors.pacer
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
+    );
   }
 
   void _paintWaypoints(Canvas canvas, Rect chart, double Function(double) xOf) {
@@ -233,6 +261,7 @@ class _ProfilePainter extends CustomPainter {
   bool shouldRepaint(_ProfilePainter old) =>
       old.route != route ||
       old.along != along ||
+      old.pacer != pacer ||
       old.others.length != others.length ||
       !_sameMarkers(old.others, others) ||
       old.line != line ||

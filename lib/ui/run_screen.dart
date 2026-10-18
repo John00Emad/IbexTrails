@@ -14,6 +14,7 @@ import '../core/checkpoints.dart';
 import '../core/course.dart';
 import '../core/geo.dart';
 import '../core/group.dart';
+import '../core/pacer.dart';
 import '../core/protocol.dart';
 import '../core/turns.dart';
 import '../services/location_service.dart';
@@ -28,6 +29,8 @@ import 'elevation_profile.dart';
 import 'fuel_sheet.dart';
 import 'group_sheet.dart';
 import 'layers_sheet.dart';
+import 'pacer_plan_screen.dart';
+import 'pacer_sheet.dart';
 import 'route_picker.dart';
 import 'run_detail_screen.dart';
 import 'settings_screen.dart';
@@ -78,6 +81,7 @@ enum _MenuAction {
   route,
   download,
   layers,
+  pacer,
   screen,
   save,
   settings,
@@ -518,6 +522,10 @@ class _RunScreenState extends State<RunScreen> {
         _downloadMap();
       case _MenuAction.layers:
         _chooseLayers();
+      case _MenuAction.pacer:
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const PacerPlanScreen()),
+        );
       case _MenuAction.screen:
         final on = !settings.keepScreenOn;
         settings.keepScreenOn = on;
@@ -711,6 +719,13 @@ class _RunScreenState extends State<RunScreen> {
               child: ListTile(
                 leading: Icon(Icons.layers_outlined),
                 title: Text('Map layers'),
+              ),
+            ),
+            const PopupMenuItem(
+              value: _MenuAction.pacer,
+              child: ListTile(
+                leading: Icon(Icons.speed),
+                title: Text('Virtual pacer'),
               ),
             ),
             PopupMenuItem(
@@ -1223,8 +1238,12 @@ class _StatsPanel extends StatelessWidget {
         ? Duration.zero
         : DateTime.now().difference(s.startedAt!);
     final speed = s.fix?.speed ?? 0;
-    final pace = speed > 0.5
-        ? formatDuration(Duration(seconds: (1000 / speed).round()))
+    // The pacer's pace is steadier: the last minute's.
+    final steady = s.pacer?.pace;
+    final pace = steady != null
+        ? formatPace(steady)
+        : speed > 0.5
+        ? formatPace(1000 / speed)
         : '–';
 
     final tiles = <Widget>[];
@@ -1286,6 +1305,7 @@ class _StatsPanel extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Row(children: [for (final t in tiles) Expanded(child: t)]),
+              if (s.pacer != null) _PacerLine(session: s),
               if (s.nextTurn != null && s.nextTurn!.distance <= 1000)
                 _TurnLine(next: s.nextTurn!),
               if (outlook != null) _CheckpointLine(outlook: outlook),
@@ -1318,6 +1338,7 @@ class _StatsPanel extends StatelessWidget {
                     route: route,
                     along: m?.along,
                     others: others,
+                    pacer: s.pacer?.ghostAlong,
                     ticks: s.course?.checkpoints.map((c) => c.along).toList(),
                   ),
                 ),
@@ -1370,6 +1391,88 @@ class StatTile extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// "6:02 /km · On pace · 5:30–6:30" with how far ahead of the virtual
+/// pacer you are. Tap for more, and to restart the pacer.
+class _PacerLine extends StatelessWidget {
+  const _PacerLine({required this.session});
+  final RunSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final pacer = session.pacer!;
+    final pace = pacer.pace;
+    final gap = pacer.gap;
+    return InkWell(
+      onTap: () => showPacerSheet(context, session),
+      child: Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Row(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: paceColor(pacer.zone),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.speed, size: 20, color: Colors.white),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    if (pace != null)
+                      TextSpan(
+                        text: '${formatPace(pace)} /km · ',
+                        style: const TextStyle(
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    TextSpan(
+                      text: pacerStatus(pacer),
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    TextSpan(text: ' · ${pacerRange(pacer)}'),
+                  ],
+                ),
+                style: Theme.of(context).textTheme.bodyLarge,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (gap != null)
+              Tooltip(
+                message: gap.isNegative
+                    ? 'Behind the pacer'
+                    : 'Ahead of the pacer',
+                child: Container(
+                  margin: const EdgeInsets.only(left: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: paceColor(pacer.schedule),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    formatGap(gap),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

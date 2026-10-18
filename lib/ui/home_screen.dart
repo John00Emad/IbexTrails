@@ -8,6 +8,7 @@ import '../state/run_session.dart';
 import 'fuel_plan_screen.dart';
 import 'join_screen.dart';
 import 'organize_screen.dart';
+import 'pacer_plan_screen.dart';
 import 'route_picker.dart';
 import 'run_screen.dart';
 import 'runs_screen.dart';
@@ -203,6 +204,23 @@ class _HomeScreenState extends State<HomeScreen> {
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
                             builder: (_) => const FuelPlanScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.speed, color: Brand.canyon),
+                        title: const Text(
+                          'Virtual pacer',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        subtitle: Text(describePacer(app.settings.pacerPlan)),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const PacerPlanScreen(),
                           ),
                         ),
                       ),

@@ -50,6 +50,10 @@ void main() {
         100,
         scrollable: find.byType(Scrollable).first,
       );
+      // The row is built, but its title may still be off screen or under
+      // the app bar.
+      await tester.ensureVisible(find.text(sound.label));
+      await tester.pump();
       await tester.tap(find.text(sound.label));
     }
     expect(notifier.played, AlarmSound.values);

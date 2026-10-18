@@ -138,6 +138,7 @@ abstract final class TerrainScene {
           }
         : null;
 
+    final pacer = s.pacer?.ghostAlong;
     final from = recordedFrom > s.recorded.length ? 0 : recordedFrom;
     return {
       'cut': cut,
@@ -153,6 +154,9 @@ abstract final class TerrainScene {
           ? null
           : circle(f.latitude, f.longitude, f.accuracy),
       'people': people,
+      'pacer': route != null && pacer != null
+          ? _lonLat(route.pointAt(pacer))
+          : null,
       'pins': pins,
       'trail': trail,
       'recordedFrom': from,
