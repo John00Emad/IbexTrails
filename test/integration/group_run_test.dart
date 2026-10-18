@@ -15,6 +15,7 @@ import 'package:ibex_trails/core/crypto.dart';
 import 'package:ibex_trails/core/event_code.dart';
 import 'package:ibex_trails/core/geo.dart';
 import 'package:ibex_trails/core/group.dart';
+import 'package:ibex_trails/core/pacer.dart';
 import 'package:ibex_trails/core/protocol.dart';
 import 'package:ibex_trails/core/route.dart';
 import 'package:ibex_trails/services/alarm_audio.dart';
@@ -566,5 +567,105 @@ void main() {
     expect((await RunLibrary.list()).single.id, first.id);
     // Leaving the event forgets it.
     expect(settings.activeEvent, isNull);
+  });
+
+  test('a rejoin keeps the virtual pacer where it set off', () async {
+    settings.pacerPlan = const PacerPlan(enabled: true, hills: false);
+    final code = normalizeEventCode(generateEventCode())!;
+    final organizer = SimulatedDevice(
+      await EventCipher.forCode(code),
+      host,
+      port,
+      'sim-org-pacer',
+    );
+    addTearDown(organizer.relay.dispose);
+    await organizer.start();
+    final course = Course.fromRoute(
+      TrailRoute.fromShareJson(route.toShareJson()),
+      id: 'c1',
+      name: '4 km',
+    );
+    final now = DateTime.now();
+    await organizer.send(
+      organizer.topics.event,
+      EventInfo(
+        name: 'Tempo',
+        organizerId: 'org',
+        organizerName: 'Olga',
+        updated: now,
+        courses: [course.info],
+      ).toJson(),
+    );
+    await organizer.send(
+      organizer.topics.course(course.id),
+      CourseUpdate(course, now).toJson(),
+    );
+
+    // Along the course at 6:30 /km, the pacer's pace: a fix every 2 s.
+    var time = DateTime.now();
+    var along = 0.0;
+    void runFor(StreamController<Position> gps, TrailRoute r, int seconds) {
+      for (var i = 0; i < seconds; i += 2) {
+        time = time.add(const Duration(seconds: 2));
+        along += 1000 / 390 * 2;
+        final p = r.pointAt(along);
+        gps.add(
+          Position(
+            latitude: p.lat,
+            longitude: p.lon,
+            timestamp: time,
+            accuracy: 5,
+            altitude: p.ele ?? 0,
+            altitudeAccuracy: 5,
+            heading: 90,
+            headingAccuracy: 10,
+            speed: 1000 / 390,
+            speedAccuracy: 1,
+          ),
+        );
+      }
+    }
+
+    final gps = StreamController<Position>();
+    final before = await RunSession.join(
+      settings,
+      Notifier(),
+      code: code,
+      role: Role.runner,
+      locationSource: () => gps.stream,
+    );
+    await waitFor(() => before.route != null, what: 'course');
+    runFor(gps, before.route!, 60);
+    await waitFor(() => before.pacer!.anchor != null, what: 'pacer set off');
+    final anchor = before.pacer!.anchor!;
+    // The app is closed mid-run, without leaving...
+    before.dispose();
+    await gps.close();
+
+    // ...and the runner taps Rejoin.
+    final active = settings.activeEvent!;
+    final gps2 = StreamController<Position>();
+    final after = await RunSession.join(
+      settings,
+      Notifier(),
+      code: active.code,
+      role: active.role,
+      startedAt: active.startedAt,
+      locationSource: () => gps2.stream,
+    );
+    await waitFor(() => after.route != null, what: 'course again');
+    // Kept to the millisecond, like the rest of the run's saved state.
+    expect(
+      after.pacer!.anchor!.time.millisecondsSinceEpoch,
+      anchor.time.millisecondsSinceEpoch,
+    );
+    expect(after.pacer!.anchor!.progress, anchor.progress);
+    // Still level with the pacer, not starting over.
+    runFor(gps2, after.route!, 10);
+    await waitFor(() => after.pacer!.gap != null, what: 'gap');
+    expect(after.pacer!.gap!.inSeconds.abs(), lessThanOrEqualTo(2));
+    expect(after.pacer!.lead, greaterThan(-10));
+    await after.leave();
+    await gps2.close();
   });
 }

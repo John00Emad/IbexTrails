@@ -36,6 +36,9 @@ abstract final class TrailColors {
   static const danger = Color(0xFFD62839);
   static const warning = Color(0xFFE89B00);
   static const ok = Color(0xFF2E8B57);
+
+  /// The virtual pacer on the map and the elevation profile.
+  static const pacer = Brand.night;
 }
 
 class IbexTrailsApp extends StatelessWidget {

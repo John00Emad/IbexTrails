@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:ibex_trails/core/course.dart';
 import 'package:ibex_trails/core/geo.dart';
+import 'package:ibex_trails/core/pacer.dart';
 import 'package:ibex_trails/core/route.dart';
 import 'package:ibex_trails/services/map_layers.dart';
 import 'package:ibex_trails/services/notifications.dart';
@@ -17,10 +18,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers.dart';
 
-Position _fix(GeoPoint p, {double speed = 3, double heading = 90}) => Position(
+Position _fix(
+  GeoPoint p, {
+  double speed = 3,
+  double heading = 90,
+  DateTime? at,
+}) => Position(
   latitude: p.lat,
   longitude: p.lon,
-  timestamp: DateTime.now(),
+  timestamp: at ?? DateTime.now(),
   accuracy: 10,
   altitude: 0,
   altitudeAccuracy: 5,
@@ -161,6 +167,7 @@ void main() {
     expect(live['accuracy'], isNotNull);
     expect(live['offRoute'], isNull);
     expect(live['people'], isEmpty);
+    expect(live['pacer'], isNull, reason: 'pacer off');
 
     final recorded = session.recorded.length;
     expect(recorded, greaterThan(5));
@@ -188,5 +195,42 @@ void main() {
     final guide = live['offRoute']! as List;
     expect(guide, hasLength(2));
     expect((guide.last as List)[1], closeTo(originLat, 1e-4));
+  });
+
+  test('the virtual pacer is where its pace has got it on the route', () async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = await AppSettings.load()
+      ..pacerPlan = const PacerPlan(enabled: true);
+    final gps = StreamController<Position>();
+    final route = _hairpin();
+    final session = await RunSession.solo(
+      settings,
+      Notifier(),
+      route: route,
+      locationSource: () => gps.stream,
+    );
+    addTearDown(() {
+      session.dispose();
+      gps.close();
+    });
+    final now = DateTime.now();
+    expect(
+      TerrainScene.live(session, now: now, recordedFrom: 0)['pacer'],
+      isNull,
+    );
+
+    // A minute east at 3 m/s, a fix every 2 s.
+    var at = now;
+    for (var e = 6.0; e <= 180; e += 6) {
+      at = at.add(const Duration(seconds: 2));
+      gps.add(_fix(offset(0, e), at: at));
+    }
+    await pumpEventQueue();
+    final ghost = session.pacer!.ghostAlong!;
+    expect(ghost, greaterThan(0));
+    final pacer =
+        TerrainScene.live(session, now: now, recordedFrom: 0)['pacer']! as Map;
+    expect(pacer['lon'], closeTo(route.pointAt(ghost).lon, 1e-5));
+    expect(pacer['lat'], closeTo(route.pointAt(ghost).lat, 1e-5));
   });
 }

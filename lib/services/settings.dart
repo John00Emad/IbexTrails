@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/fuel.dart';
+import '../core/pacer.dart';
 import '../core/protocol.dart';
 import 'map_layers.dart';
 
@@ -169,6 +170,19 @@ class AppSettings extends ChangeNotifier {
   }
 
   set fuelPlan(FuelPlan plan) => _set('fuelPlan', jsonEncode(plan.toJson()));
+
+  /// The virtual pacer: the pace range to hold and how to be told.
+  PacerPlan get pacerPlan {
+    final raw = _prefs.getString('pacerPlan');
+    if (raw == null) return const PacerPlan();
+    try {
+      return PacerPlan.fromJson(jsonDecode(raw) as Map);
+    } on Object {
+      return const PacerPlan();
+    }
+  }
+
+  set pacerPlan(PacerPlan plan) => _set('pacerPlan', jsonEncode(plan.toJson()));
 
   /// Course (distance) chosen in the event with [code].
   String? courseFor(String code) => _prefs.getString('course:$code');

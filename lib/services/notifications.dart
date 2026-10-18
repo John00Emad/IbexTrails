@@ -303,6 +303,7 @@ abstract final class NoteId {
   static const turn = 9;
   static const allIn = 10;
   static const preview = 11;
+  static const pacer = 12;
 
   /// Group alerts get ids derived from participant + kind.
   static int group(String key) => 1000 + (key.hashCode & 0x3fffffff) % 100000;

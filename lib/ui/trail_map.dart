@@ -363,6 +363,25 @@ class _TrailMapState extends State<TrailMap> {
       );
     }
 
+    // The virtual pacer: where your target pace would have you by now.
+    final pacer = s.pacer?.ghostAlong;
+    if (route != null && pacer != null) {
+      layers.add(
+        MarkerLayer(
+          markers: [
+            Marker(
+              point: ll(route.pointAt(pacer)),
+              width: 80,
+              height: 56,
+              // The dot on the point, the label below it.
+              alignment: const Alignment(0, 0.5),
+              child: const _PacerPin(),
+            ),
+          ],
+        ),
+      );
+    }
+
     // Other participants.
     final others = s.group.participants.where((p) => p.id != s.myId).toList();
     if (others.isNotEmpty) {
@@ -578,6 +597,54 @@ class _PersonPin extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The virtual pacer, running at the middle of your pace range.
+class _PacerPin extends StatelessWidget {
+  const _PacerPin();
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Virtual pacer',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: TrailColors.pacer.withValues(alpha: 0.85),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+              boxShadow: const [
+                BoxShadow(blurRadius: 3, color: Colors.black38),
+              ],
+            ),
+            child: const Icon(
+              Icons.directions_run,
+              size: 18,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text(
+              'Pacer',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11, color: Colors.black87),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

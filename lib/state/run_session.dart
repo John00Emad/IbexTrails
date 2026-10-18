@@ -17,6 +17,7 @@ import '../core/fuel.dart';
 import '../core/geo.dart';
 import '../core/gpx.dart';
 import '../core/group.dart';
+import '../core/pacer.dart';
 import '../core/protocol.dart';
 import '../core/route.dart';
 import '../core/route_matcher.dart';
@@ -42,6 +43,9 @@ class RunSession extends ChangeNotifier {
     this.startedAt,
   }) {
     notifier.onAction = handleNotificationAction;
+    // The pacer can be turned on, off or changed in the middle of a run.
+    settings.addListener(_syncPacer);
+    _syncPacer();
   }
 
   /// Replaces the device GPS, for tests and simulations.
@@ -111,6 +115,11 @@ class RunSession extends ChangeNotifier {
 
   /// Reminder currently shown in the app, until logged or dismissed.
   FuelReminder? fuelReminder;
+
+  // ---- Virtual pacer (private to this device) ----------------------------
+  /// Paces the runner against their target range. Null while turned off.
+  VirtualPacer? pacer;
+  Object? _pacerSaved;
 
   // ---- Navigation --------------------------------------------------------
   TrailRoute? route;
@@ -337,6 +346,7 @@ class RunSession extends ChangeNotifier {
       _updateCheckpoints(match!, here, DateTime.now());
       _updateTurnCue(match!);
     }
+    _updatePacer(p);
 
     if (prevFix == null && isEvent) _publishReport();
     if (_lastSentStatus != null && status != _lastSentStatus) _publishReport();
@@ -493,6 +503,7 @@ class RunSession extends ChangeNotifier {
 
   void _setRoute(TrailRoute r) {
     route = r;
+    pacer?.route = r;
     _matcher = RouteMatcher(r, offRouteThreshold: settings.offRouteMeters);
     match = null;
     final f = fix;
@@ -570,6 +581,8 @@ class RunSession extends ChangeNotifier {
       _turnWarned.clear();
       _turnBuzzed.clear();
     }
+    pacer?.raceStart = c.start;
+    if (!sameRoute) _restorePacer();
   }
 
   /// Picks the course automatically when there is no real choice, or the
@@ -741,6 +754,7 @@ class RunSession extends ChangeNotifier {
       );
     }
     _checkMissedCutoffs(now);
+    pacer?.tick(now);
     final f = fuel;
     if (f != null) {
       f.plan = settings.fuelPlan;
@@ -752,6 +766,109 @@ class RunSession extends ChangeNotifier {
       }
     }
     _syncTrack();
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------------------
+  // Virtual pacer. Never leaves this device.
+  // ------------------------------------------------------------------------
+
+  /// Starts, updates or stops the pacer to match the plan in the settings.
+  void _syncPacer() {
+    if (_disposed) return;
+    final plan = settings.pacerPlan;
+    final p = pacer;
+    if (!plan.enabled) {
+      if (p == null) return;
+      pacer = null;
+      notifier.cancel(NoteId.pacer);
+      // Turned on again later, it starts afresh.
+      if (code != null) settings.setRunData('pacer:$code', null);
+      _pacerSaved = null;
+    } else if (p != null) {
+      p.plan = plan;
+    } else {
+      pacer = VirtualPacer(plan: plan, route: route)..raceStart = course?.start;
+      _restorePacer();
+    }
+  }
+
+  /// After a rejoin, carries on with the virtual runner from before the app
+  /// was closed. Only on a course: distance run starts again from zero.
+  void _restorePacer() {
+    final p = pacer;
+    final c = course;
+    if (p == null || c == null || code == null) return;
+    final saved = settings.runData('pacer:$code');
+    if (saved is Map && saved['c'] == c.id) {
+      p.restore(saved);
+      _pacerSaved = saved['t'];
+    }
+  }
+
+  /// Remembers where the virtual runner set off, when that changes.
+  void _savePacer() {
+    final c = course;
+    if (code == null || c == null) return;
+    final json = pacer?.toJson();
+    final at = json?['t'];
+    if (at == _pacerSaved) return;
+    _pacerSaved = at;
+    settings.setRunData(
+      'pacer:$code',
+      json == null ? null : {'c': c.id, ...json},
+    );
+  }
+
+  void _updatePacer(Position p) {
+    final pacer = this.pacer;
+    if (pacer == null || p.accuracy > 35) return;
+    final m = match;
+    final turn = nextTurn;
+    final cue = pacer.addFix(
+      p.timestamp,
+      distance: distanceRun,
+      speed: p.speed > 0 ? p.speed : null,
+      along: m?.along,
+      // The off-route and wrong-way alarms come first, and a pace cue
+      // mustn't talk over a turn warning.
+      quiet:
+          (m != null && (m.offRoute || m.wrongWay)) ||
+          (turn != null && turn.distance <= settings.turnWarnMeters + 40),
+      finished: m?.finished ?? false,
+    );
+    _savePacer();
+    if (cue != null) _cuePace(cue, pacer);
+  }
+
+  /// Tells the runner their pace left the range, or is back in it: a buzz,
+  /// a spoken cue, and a notification while the screen is off.
+  void _cuePace(PacerCue cue, VirtualPacer pacer) {
+    if (cue.zone == PaceZone.onPace) {
+      HapticFeedback.mediumImpact();
+      notifier.cancel(NoteId.pacer);
+    } else {
+      HapticFeedback.heavyImpact();
+      final inBackground =
+          WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+      if (inBackground) {
+        final (lo, hi) = pacer.range;
+        notifier.info(
+          NoteId.pacer,
+          cue.title,
+          '${formatPace(cue.pace)} /km · range '
+          '${formatPace(lo)}–${formatPace(hi)}',
+        );
+      }
+    }
+    if (pacer.plan.voice) _voice?.say(cue.spoken);
+  }
+
+  /// Sets the virtual runner off again from here (from the next stretch of
+  /// running if standing still), e.g. at the start line.
+  void restartPacer() {
+    pacer?.restart(DateTime.now());
+    _savePacer();
     notifyListeners();
   }
 
@@ -1257,6 +1374,7 @@ class RunSession extends ChangeNotifier {
     await notifier.cancel(NoteId.offRoute);
     await notifier.cancel(NoteId.wrongWay);
     await notifier.cancel(NoteId.fuel);
+    await notifier.cancel(NoteId.pacer);
     dispose();
     return saved;
   }
@@ -1276,6 +1394,7 @@ class RunSession extends ChangeNotifier {
     _alertTimer?.cancel();
     _tick?.cancel();
     _voice?.dispose();
+    settings.removeListener(_syncPacer);
     notifier.onAction = null;
     relay?.state.removeListener(_onRelayState);
     relay?.dispose();
