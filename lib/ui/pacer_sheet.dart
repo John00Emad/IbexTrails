@@ -137,7 +137,7 @@ class _PacerSheet extends StatelessWidget {
             _PaceGauge(pace: pace, fastest: lo, slowest: hi, color: color),
             const SizedBox(height: 8),
             Text(
-              'Your pace over the last minute. Range '
+              'Your pace over ${averagePhrase(plan.averageSeconds)}. Range '
               '${pacerRange(pacer)} /km.',
               style: theme.textTheme.bodyMedium,
             ),

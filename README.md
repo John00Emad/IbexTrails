@@ -82,11 +82,12 @@ the map background is blank. On a phone you see the map layers you picked.)*
   for 15 seconds and the phone buzzes and tells you ("Too slow: 7 minutes 5
   seconds per kilometre. Pick it up."), even with the screen off, then
   reminds you every 3 minutes until you're back on pace. Your pace is
-  averaged over the last minute, so overtaking someone doesn't set it off,
-  and the pacer keeps quiet while you stop, near turns and off route. On a
-  route with elevation, climbs get more time (km-effort). The pacer sets off
-  when you start running, or at the race start if the organizer set one; tap
-  the pacer line to restart it from where you are.
+  averaged over the last minute (or 15 s to 2 min, as you choose), so
+  overtaking someone doesn't set it off, and the pacer keeps quiet while you
+  stop, near turns and off route. On a route with elevation, climbs get more
+  time (km-effort). The pacer sets off when you start running, or at the race
+  start if the organizer set one; tap the pacer line to restart it from where
+  you are.
 - **Fuelling reminders.** Set a carb target (e.g. 60 g per hour) and a fluid
   target, and list what you carry: gels, chews, dates, drinks, with the carbs
   from their labels. A chime plays when it's time, saying how much and

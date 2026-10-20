@@ -13,11 +13,16 @@ class PacerPlan {
     this.slowest = 420,
     this.hills = true,
     this.voice = true,
+    this.averageSeconds = 60,
   });
 
   /// Range limits: 3:00 to 15:00 per km.
   static const minPace = 180;
   static const maxPace = 900;
+
+  /// What [averageSeconds] can be: shorter reacts sooner, longer ignores
+  /// GPS wobble in canyons and on switchbacks.
+  static const averageOptions = [15, 30, 60, 120];
 
   final bool enabled;
 
@@ -33,6 +38,9 @@ class PacerPlan {
   /// Say cues out loud as well as buzzing.
   final bool voice;
 
+  /// The pace is averaged over this many seconds of running.
+  final int averageSeconds;
+
   /// The virtual runner's pace: the middle of the range.
   double get target => (fastest + slowest) / 2;
 
@@ -42,12 +50,14 @@ class PacerPlan {
     int? slowest,
     bool? hills,
     bool? voice,
+    int? averageSeconds,
   }) => PacerPlan(
     enabled: enabled ?? this.enabled,
     fastest: fastest ?? this.fastest,
     slowest: slowest ?? this.slowest,
     hills: hills ?? this.hills,
     voice: voice ?? this.voice,
+    averageSeconds: averageSeconds ?? this.averageSeconds,
   );
 
   Map<String, Object?> toJson() => {
@@ -56,6 +66,7 @@ class PacerPlan {
     'slow': slowest,
     'hills': hills,
     'voice': voice,
+    'avg': averageSeconds,
   };
 
   static PacerPlan fromJson(Map json) {
@@ -63,12 +74,14 @@ class PacerPlan {
         ((v as num?)?.round() ?? fallback).clamp(minPace, maxPace);
     final a = pace(json['fast'], 360);
     final b = pace(json['slow'], 420);
+    final average = (json['avg'] as num?)?.toInt();
     return PacerPlan(
       enabled: json['on'] as bool? ?? false,
       fastest: math.min(a, b),
       slowest: math.max(a, b),
       hills: json['hills'] as bool? ?? true,
       voice: json['voice'] as bool? ?? true,
+      averageSeconds: averageOptions.contains(average) ? average! : 60,
     );
   }
 }
@@ -152,9 +165,9 @@ class _Sample {
 /// Runs with you at your target pace and keeps an eye on yours.
 ///
 /// Feed it every GPS fix with [addFix]. It averages your pace over the last
-/// minute of running, compares it with the plan's range (allowing more time
-/// on climbs), and returns a [PacerCue] when you drift out of the range and
-/// when you are back in it. It also keeps a virtual runner going at the
+/// [window] of running, compares it with the plan's range (allowing more
+/// time on climbs), and returns a [PacerCue] when you drift out of the range
+/// and when you are back in it. It also keeps a virtual runner going at the
 /// middle of the range, from when you start running, so you can see how far
 /// ahead or behind it you are.
 ///
@@ -165,11 +178,14 @@ class VirtualPacer {
 
   PacerPlan plan;
 
-  /// The pace is averaged over this much running.
-  static const window = Duration(seconds: 60);
+  /// The pace is averaged over this much running: the plan's
+  /// [PacerPlan.averageSeconds].
+  Duration get window => Duration(seconds: plan.averageSeconds);
 
-  /// Running needed before the pace counts, after starting or a stop.
-  static const settle = Duration(seconds: 20);
+  /// Running needed before the pace counts, after starting or a stop: 20 s,
+  /// or the whole [window] when that is shorter.
+  Duration get settle => window < _settle ? window : _settle;
+  static const _settle = Duration(seconds: 20);
 
   /// No movement for this long is a stop: the pacer goes quiet.
   static const stopAfter = Duration(seconds: 10);
@@ -243,8 +259,8 @@ class VirtualPacer {
     _reset();
   }
 
-  /// Your pace (s/km), averaged over the last minute of running. Null until
-  /// you have been running for a moment, and while you stop.
+  /// Your pace (s/km), averaged over the last [window] of running. Null
+  /// until you have been running for a moment, and while you stop.
   double? get pace => _pace;
 
   /// Whether you were running and have stopped.

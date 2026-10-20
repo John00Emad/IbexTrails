@@ -88,6 +88,23 @@ class PacerPlanScreen extends StatelessWidget {
                 value: plan.hills,
                 onChanged: (v) => update(plan.copyWith(hills: v)),
               ),
+              ListTile(
+                title: const Text('Average your pace over'),
+                subtitle: const Text(
+                  'Shorter reacts sooner. Longer ignores GPS wobble in '
+                  'canyons and on switchbacks.',
+                ),
+                trailing: DropdownButton<int>(
+                  value: plan.averageSeconds,
+                  items: [
+                    for (final s in PacerPlan.averageOptions)
+                      DropdownMenuItem(value: s, child: Text(averageLabel(s))),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) update(plan.copyWith(averageSeconds: v));
+                  },
+                ),
+              ),
               SwitchListTile(
                 title: const Text('Say it out loud'),
                 subtitle: const Text(
@@ -101,8 +118,9 @@ class PacerPlanScreen extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                 child: Text(
-                  'Your pace is averaged over the last minute, so a short '
-                  'surge doesn\'t count. Out of the range for 15 seconds, '
+                  'Your pace is updated every second or two, averaged over '
+                  '${averagePhrase(plan.averageSeconds)}, so a short surge '
+                  'doesn\'t count. Out of the range for 15 seconds, '
                   'you are told, and reminded every 3 minutes until you are '
                   'back on pace. The pacer is quiet while you stop, near '
                   'turns and off route.\n\n'
@@ -126,6 +144,17 @@ String describePacer(PacerPlan plan) {
   return '${formatPace(plan.fastest)}–${formatPace(plan.slowest)} per km'
       '${plan.voice ? ' · voice cues' : ''}';
 }
+
+/// "30 s", "1 min".
+String averageLabel(int seconds) =>
+    seconds < 60 ? '$seconds s' : '${seconds ~/ 60} min';
+
+/// "the last 30 seconds", "the last minute", "the last 2 minutes".
+String averagePhrase(int seconds) => switch (seconds) {
+  < 60 => 'the last $seconds seconds',
+  60 => 'the last minute',
+  _ => 'the last ${seconds ~/ 60} minutes',
+};
 
 /// Seconds per km between steps.
 const _step = 5;

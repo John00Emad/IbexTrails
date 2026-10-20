@@ -1238,7 +1238,7 @@ class _StatsPanel extends StatelessWidget {
         ? Duration.zero
         : DateTime.now().difference(s.startedAt!);
     final speed = s.fix?.speed ?? 0;
-    // The pacer's pace is steadier: the last minute's.
+    // The pacer's pace is steadier: averaged over its window.
     final steady = s.pacer?.pace;
     final pace = steady != null
         ? formatPace(steady)
