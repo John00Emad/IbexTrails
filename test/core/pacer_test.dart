@@ -97,6 +97,16 @@ void main() {
     });
   });
 
+  test('averages over a minute unless set otherwise', () {
+    expect(const PacerPlan().averageSeconds, 60);
+    final plan = PacerPlan.fromJson(
+      const PacerPlan(averageSeconds: 30).toJson(),
+    );
+    expect(plan.averageSeconds, 30);
+    // A value this version doesn't offer.
+    expect(PacerPlan.fromJson(const {'avg': 45}).averageSeconds, 60);
+  });
+
   test('paces are shown as m:ss and said in words', () {
     expect(formatPace(330), '5:30');
     expect(formatPace(359.6), '6:00');
@@ -129,6 +139,32 @@ void main() {
       expect(r.pacer.pace, inExclusiveRange(300, 390));
       r.run(300, 40);
       expect(r.pacer.pace, closeTo(300, 0.5));
+    });
+
+    test('a shorter average reacts sooner', () {
+      final quick = _Runner(
+        VirtualPacer(plan: _plan.copyWith(averageSeconds: 30)),
+      )..run(390, 60);
+      final steady = _Runner(VirtualPacer(plan: _plan))..run(390, 60);
+      // Half a minute at 5:00: all of a 30 s average, half of a minute's.
+      quick.run(300, 32);
+      steady.run(300, 32);
+      expect(quick.pacer.window, const Duration(seconds: 30));
+      expect(quick.pacer.pace, closeTo(300, 0.5));
+      expect(steady.pacer.pace, inExclusiveRange(320, 360));
+    });
+
+    test('a 15 s average counts after 15 s rather than 20', () {
+      final quick = _Runner(
+        VirtualPacer(plan: _plan.copyWith(averageSeconds: 15)),
+      );
+      final steady = _Runner(VirtualPacer(plan: _plan));
+      quick.run(390, 14);
+      expect(quick.pacer.pace, isNull);
+      quick.run(390, 4);
+      steady.run(390, 18);
+      expect(quick.pacer.pace, closeTo(390, 0.5));
+      expect(steady.pacer.pace, isNull);
     });
 
     test('stops and starts afresh after standing still', () {
@@ -201,6 +237,17 @@ void main() {
       expect(r.heard, ['Too slow', 'Back on pace']);
       r.run(390, 300);
       expect(r.heard, ['Too slow', 'Back on pace']);
+    });
+
+    test('a shorter average tells you sooner', () {
+      final quick = _Runner(
+        VirtualPacer(plan: _plan.copyWith(averageSeconds: 30)),
+      )..run(390, 60);
+      final steady = _Runner(VirtualPacer(plan: _plan))..run(390, 60);
+      quick.run(480, 34);
+      steady.run(480, 34);
+      expect(quick.heard, ['Too slow']);
+      expect(steady.heard, isEmpty, reason: 'only just out of the range');
     });
 
     test('a short surge says nothing', () {

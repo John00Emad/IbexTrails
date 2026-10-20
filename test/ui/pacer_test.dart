@@ -71,7 +71,10 @@ void main() {
     expect(settings.pacerPlan.slowest, 410);
     expect(find.text('Pace range: 6:05–6:50 per km'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(SwitchListTile, 'Say it out loud'));
+    final voice = find.widgetWithText(SwitchListTile, 'Say it out loud');
+    await tester.ensureVisible(voice);
+    await tester.pump();
+    await tester.tap(voice);
     await tester.pump();
     expect(settings.pacerPlan.voice, isFalse);
 
@@ -91,6 +94,37 @@ void main() {
       find.widgetWithIcon(IconButton, Icons.add).first,
     );
     expect(slower.onPressed, isNull, reason: 'fastest is at slowest');
+  });
+
+  testWidgets('choose how long the pace is averaged over', (tester) async {
+    settings = (await tester.runAsync(AppSettings.load))!
+      ..pacerPlan = const PacerPlan(enabled: true);
+    await show(tester, const PacerPlanScreen());
+    // "How it works" says how long, at the bottom of the screen.
+    final howItWorks = find.textContaining('averaged over the last');
+    Future<void> readHowItWorks() => tester.scrollUntilVisible(
+      howItWorks,
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await readHowItWorks();
+    expect(
+      find.textContaining('averaged over the last minute'),
+      findsOneWidget,
+    );
+
+    await tester.ensureVisible(find.text('1 min'));
+    await tester.pump();
+    await tester.tap(find.text('1 min'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('30 s').last);
+    await tester.pumpAndSettle();
+    expect(settings.pacerPlan.averageSeconds, 30);
+    await readHowItWorks();
+    expect(
+      find.textContaining('averaged over the last 30 seconds'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('settings shows it under Pacing', (tester) async {

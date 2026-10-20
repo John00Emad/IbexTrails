@@ -104,8 +104,13 @@ void main() {
       await run(390, 20);
       expect(s.pacer!.pace, closeTo(390, 1));
 
-      settings.pacerPlan = _plan.copyWith(fastest: 300, slowest: 330);
+      settings.pacerPlan = _plan.copyWith(
+        fastest: 300,
+        slowest: 330,
+        averageSeconds: 30,
+      );
       expect(s.pacer!.range, (300, 330));
+      expect(s.pacer!.window, const Duration(seconds: 30));
 
       settings.pacerPlan = _plan.copyWith(enabled: false);
       expect(s.pacer, isNull);
