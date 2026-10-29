@@ -118,7 +118,7 @@ class PacerPlanScreen extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                 child: Text(
-                  'Your pace is updated every second or two, averaged over '
+                  'Your pace is updated every second, averaged over '
                   '${averagePhrase(plan.averageSeconds)}, so a short surge '
                   'doesn\'t count. Out of the range for 15 seconds, '
                   'you are told, and reminded every 3 minutes until you are '

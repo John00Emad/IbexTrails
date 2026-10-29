@@ -106,6 +106,7 @@ class _TerrainMapState extends State<TerrainMap> {
   String? _sentLayers;
   Object? _sentRoute;
   Object? _sentCourse;
+  Object? _sentFix;
   int _sentRecorded = 0;
 
   RunSession get s => widget.session;
@@ -201,6 +202,7 @@ class _TerrainMapState extends State<TerrainMap> {
         _sentLayers = null;
         _sentRoute = null;
         _sentCourse = null;
+        _sentFix = null;
         _sentRecorded = 0;
         _flush();
         _initialCamera();
@@ -245,10 +247,16 @@ class _TerrainMapState extends State<TerrainMap> {
     unawaited(_js('ibex.setLayers($cfg)'));
   }
 
-  /// Sends changes at most about once a second: GPS fixes and group
-  /// updates arrive far more often than the map needs.
+  /// Sends a new GPS fix straight away, so you see where you are now. Other
+  /// changes (group updates) go at most about once a second: they arrive
+  /// far more often than the map needs.
   void _schedule() {
-    if (!_ready || (_throttle?.isActive ?? false)) return;
+    if (!_ready) return;
+    if (s.fix != _sentFix) {
+      _flush();
+      return;
+    }
+    if (_throttle?.isActive ?? false) return;
     final wait =
         const Duration(seconds: 1) - DateTime.now().difference(_lastFlush);
     _throttle = Timer(wait.isNegative ? Duration.zero : wait, _flush);
@@ -258,6 +266,7 @@ class _TerrainMapState extends State<TerrainMap> {
     if (!_ready || !mounted) return;
     _throttle?.cancel();
     _lastFlush = DateTime.now();
+    _sentFix = s.fix;
     _pushLayers();
     if (s.route != _sentRoute || s.course != _sentCourse) {
       _sentRoute = s.route;

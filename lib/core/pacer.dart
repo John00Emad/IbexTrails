@@ -446,8 +446,8 @@ class VirtualPacer {
     return PacerCue(z, p);
   }
 
-  /// Moves the pacer's clock on to [now] without a fix, e.g. while standing
-  /// still (the GPS sends nothing then), and notices a stop.
+  /// Moves the pacer's clock on to [now] without a fix, e.g. while the GPS
+  /// has no signal, and notices a stop.
   void tick(DateTime now) {
     final prev = _now;
     if (prev == null || now.isAfter(prev)) _now = now;
