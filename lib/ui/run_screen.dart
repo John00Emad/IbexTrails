@@ -22,6 +22,7 @@ import '../services/map_tiles.dart';
 import '../services/relay_client.dart';
 import '../services/run_library.dart';
 import '../services/settings.dart';
+import '../state/my_heading.dart';
 import '../state/run_session.dart';
 import 'course_editor_screen.dart';
 import 'course_picker.dart';
@@ -99,6 +100,10 @@ class _RunScreenState extends State<RunScreen> {
   PrefetchProgress? _prefetchProgress;
   bool _askingCourse = false;
 
+  /// Where your arrow on the map points. Kept here, so it carries on when
+  /// you switch between 2D and 3D.
+  MyHeading? _heading;
+
   RunSession get s => widget.session;
   AppSettings get settings => s.settings;
 
@@ -117,6 +122,12 @@ class _RunScreenState extends State<RunScreen> {
     }
     s.addListener(_maybeAskCourse);
     _maybeAskCourse();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _heading ??= MyHeading(s, compass: AppScope.of(context).compass);
   }
 
   /// Asks once for the distance when the event has several.
@@ -156,6 +167,7 @@ class _RunScreenState extends State<RunScreen> {
   void dispose() {
     _clock.cancel();
     _prefetch?.cancel();
+    _heading?.dispose();
     s.removeListener(_maybeAskCourse);
     WakelockPlus.disable();
     super.dispose();
@@ -564,6 +576,7 @@ class _RunScreenState extends State<RunScreen> {
                         session: s,
                         controller: _terrain,
                         map: settings.resolvedMap,
+                        heading: _heading!,
                         follow: _follow,
                         onFollowChanged: (f) => setState(() => _follow = f),
                         selected: _selected,
@@ -573,6 +586,7 @@ class _RunScreenState extends State<RunScreen> {
                         session: s,
                         controller: _map,
                         map: settings.resolvedMap,
+                        heading: _heading!,
                         follow: _follow,
                         onFollowChanged: (f) => setState(() => _follow = f),
                         selected: _selected,

@@ -40,8 +40,10 @@ the map background is blank. On a phone you see the map layers you picked.)*
   from the menu.
 - **GPX navigation.** Load any `.gpx` file (from Strava, Komoot, Garmin,
   Wikiloc and so on). You see the route, arrows showing which way to run,
-  waypoints, and your position, updated every second, even when you're
-  hiking up a steep climb.
+  waypoints, and yourself as an arrow, updated every second, even when
+  you're hiking up a steep climb. While you run, your arrow points the way
+  you're going; stop at a junction and it turns with your phone, like a
+  compass, so you can see which way you're facing.
 - **Warnings before turns.** The app finds the sharp turns, U-turns and
   switchbacks in the GPX itself. About 60 m before each one the phone
   vibrates and says it out loud ("Sharp left in 60 metres"), over your music

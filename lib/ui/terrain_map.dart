@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -77,6 +78,7 @@ class TerrainMap extends StatefulWidget {
     required this.session,
     required this.controller,
     required this.map,
+    required this.heading,
     required this.follow,
     required this.onFollowChanged,
     this.selected,
@@ -86,6 +88,9 @@ class TerrainMap extends StatefulWidget {
   final RunSession session;
   final TerrainController controller;
   final ResolvedMap map;
+
+  /// Which way your arrow points (degrees from north); a dot while null.
+  final ValueListenable<double?> heading;
   final bool follow;
   final ValueChanged<bool> onFollowChanged;
   final String? selected;
@@ -108,6 +113,8 @@ class _TerrainMapState extends State<TerrainMap> {
   Object? _sentCourse;
   Object? _sentFix;
   int _sentRecorded = 0;
+  Timer? _headingTimer;
+  double? _sentHeading;
 
   RunSession get s => widget.session;
 
@@ -115,6 +122,7 @@ class _TerrainMapState extends State<TerrainMap> {
   void initState() {
     super.initState();
     s.addListener(_schedule);
+    widget.heading.addListener(_onHeading);
     unawaited(_start());
   }
 
@@ -161,6 +169,10 @@ class _TerrainMapState extends State<TerrainMap> {
       old.session.removeListener(_schedule);
       s.addListener(_schedule);
     }
+    if (old.heading != widget.heading) {
+      old.heading.removeListener(_onHeading);
+      widget.heading.addListener(_onHeading);
+    }
     if (old.controller != widget.controller) {
       old.controller._detach();
       if (_ready) widget.controller._attach(_js);
@@ -173,7 +185,9 @@ class _TerrainMapState extends State<TerrainMap> {
   @override
   void dispose() {
     s.removeListener(_schedule);
+    widget.heading.removeListener(_onHeading);
     _throttle?.cancel();
+    _headingTimer?.cancel();
     widget.controller._detach();
     unawaited(_proxy?.close());
     super.dispose();
@@ -278,15 +292,31 @@ class _TerrainMapState extends State<TerrainMap> {
         ),
       );
     }
+    final heading = widget.heading.value;
     final live = TerrainScene.live(
       s,
       now: DateTime.now(),
       recordedFrom: _sentRecorded,
       selected: widget.selected,
+      heading: heading,
     );
     _sentRecorded = s.recorded.length;
+    _sentHeading = heading;
     unawaited(_js('ibex.update(${jsonEncode(live)})'));
     if (widget.follow) _centerOnMe();
+  }
+
+  /// The compass turns your arrow far more often than fixes come, so
+  /// between updates only the arrow is turned, at most about 10 times a
+  /// second.
+  void _onHeading() {
+    if (!_ready || (_headingTimer?.isActive ?? false)) return;
+    _headingTimer = Timer(const Duration(milliseconds: 100), () {
+      final h = widget.heading.value;
+      if (!_ready || !mounted || h == _sentHeading) return;
+      _sentHeading = h;
+      unawaited(_js('ibex.heading(${jsonEncode(h)})'));
+    });
   }
 
   @override

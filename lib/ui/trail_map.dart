@@ -1,5 +1,7 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -51,6 +53,7 @@ class TrailMap extends StatefulWidget {
     required this.session,
     required this.controller,
     required this.map,
+    required this.heading,
     required this.follow,
     required this.onFollowChanged,
     this.selected,
@@ -62,6 +65,9 @@ class TrailMap extends StatefulWidget {
 
   /// Base map and overlays to draw.
   final ResolvedMap map;
+
+  /// Which way your arrow points (degrees from north); a dot while null.
+  final ValueListenable<double?> heading;
   final bool follow;
   final ValueChanged<bool> onFollowChanged;
 
@@ -432,7 +438,13 @@ class _TrailMapState extends State<TrailMap> {
               point: me,
               width: 40,
               height: 40,
-              child: _MeDot(heading: f.speed > 0.7 ? f.heading : null),
+              // The compass turns it between fixes without redrawing the
+              // whole map.
+              child: ValueListenableBuilder<double?>(
+                valueListenable: widget.heading,
+                builder: (context, heading, _) =>
+                    heading == null ? const _MeDot() : MeArrow(heading),
+              ),
             ),
           ],
         ),
@@ -649,35 +661,75 @@ class _PacerPin extends StatelessWidget {
   }
 }
 
+/// You on the map: an arrow pointing the way you face.
+class MeArrow extends StatelessWidget {
+  const MeArrow(this.heading, {super.key});
+
+  /// Degrees from north.
+  final double heading;
+
+  @override
+  Widget build(BuildContext context) => Transform.rotate(
+    angle: heading * math.pi / 180,
+    child: const CustomPaint(size: Size.square(40), painter: _ArrowPainter()),
+  );
+}
+
+/// The arrow (the shape of the Material "navigation" icon, as in the 3D
+/// view), with a white rim so it stands out on satellite and pale desert.
+class _ArrowPainter extends CustomPainter {
+  const _ArrowPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final u = size.width / 24;
+    final arrow = ui.Path()
+      ..moveTo(12 * u, 2 * u)
+      ..lineTo(4.5 * u, 20.29 * u)
+      ..lineTo(5.21 * u, 21 * u)
+      ..lineTo(12 * u, 18 * u)
+      ..lineTo(18.79 * u, 21 * u)
+      ..lineTo(19.5 * u, 20.29 * u)
+      ..close();
+    canvas
+      ..drawPath(
+        arrow,
+        Paint()
+          ..color = Colors.black38
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+      )
+      ..drawPath(
+        arrow,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4
+          ..strokeJoin = StrokeJoin.round,
+      )
+      ..drawPath(arrow, Paint()..color = TrailColors.me);
+  }
+
+  @override
+  bool shouldRepaint(_ArrowPainter oldDelegate) => false;
+}
+
+/// You on the map while nothing says which way you face.
 class _MeDot extends StatelessWidget {
-  const _MeDot({this.heading});
-  final double? heading;
+  const _MeDot();
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        if (heading != null)
-          Transform.rotate(
-            angle: heading! * math.pi / 180,
-            child: const Icon(
-              Icons.navigation,
-              color: TrailColors.me,
-              size: 40,
-            ),
-          ),
-        Container(
-          width: 20,
-          height: 20,
-          decoration: BoxDecoration(
-            color: TrailColors.me,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 3),
-            boxShadow: const [BoxShadow(blurRadius: 4, color: Colors.black38)],
-          ),
+    return Center(
+      child: Container(
+        width: 20,
+        height: 20,
+        decoration: BoxDecoration(
+          color: TrailColors.me,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 3),
+          boxShadow: const [BoxShadow(blurRadius: 4, color: Colors.black38)],
         ),
-      ],
+      ),
     );
   }
 }

@@ -59,6 +59,15 @@ double bearingBetween(GeoPoint a, GeoPoint b) {
   return (_deg(math.atan2(y, x)) + 360) % 360;
 }
 
+/// Change of heading from [from] to [to] in degrees, -180..180: positive
+/// turns right, negative left.
+double headingChange(double from, double to) {
+  var d = (to - from) % 360;
+  if (d > 180) d -= 360;
+  if (d <= -180) d += 360;
+  return d;
+}
+
 /// 16-wind compass name for a bearing, e.g. `NNE`.
 String compassName(double bearing) {
   const names = [

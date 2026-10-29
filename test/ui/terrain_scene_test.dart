@@ -155,7 +155,12 @@ void main() {
       await runTo(e);
     }
     final now = DateTime.now();
-    var live = TerrainScene.live(session, now: now, recordedFrom: 0);
+    var live = TerrainScene.live(
+      session,
+      now: now,
+      recordedFrom: 0,
+      heading: 90,
+    );
     expect(jsonDecode(jsonEncode(live)), isA<Map<String, Object?>>());
 
     final cut = live['cut']! as Map;
@@ -174,7 +179,7 @@ void main() {
     expect(live['recordedFrom'], 0);
     expect(live['recorded'], hasLength(recorded));
 
-    // Next update: only what's new. Standing still: no heading arrow.
+    // Next update: only what's new. No heading: a dot.
     await runTo(350, speed: 0.2);
     live = TerrainScene.live(session, now: now, recordedFrom: recorded);
     expect(live['recordedFrom'], recorded);
