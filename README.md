@@ -40,11 +40,13 @@ the map background is blank. On a phone you see the map layers you picked.)*
   from the menu.
 - **GPX navigation.** Load any `.gpx` file (from Strava, Komoot, Garmin,
   Wikiloc and so on). You see the route, arrows showing which way to run,
-  waypoints, and your position.
+  waypoints, and your position, updated every second, even when you're
+  hiking up a steep climb.
 - **Warnings before turns.** The app finds the sharp turns, U-turns and
   switchbacks in the GPX itself. About 60 m before each one the phone
   vibrates and says it out loud ("Sharp left in 60 metres"), over your music
-  and with the screen off. The next turn also shows under the stats. It
+  and with the screen off. The faster you run, the earlier it comes, so you
+  hear it in time. The next turn also shows under the stats. It
   helps you avoid a wrong turn instead of only warning you afterwards.
 - **Off-route alarm.** If you drift more than 50 m (you can change this) from
   the trail, the phone sounds the alarm and vibrates, even in your pocket

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'geo.dart';
 import 'route.dart';
 
@@ -48,6 +50,7 @@ class Turn {
   /// What to say [distance] metres before it.
   String spoken(double distance) {
     final metres = (distance / 10).round() * 10;
+    if (metres <= 0) return '$label now';
     if (kind == TurnKind.switchbacks) {
       return 'Switchbacks ahead in $metres metres';
     }
@@ -173,3 +176,16 @@ UpcomingTurn? findNextTurn(List<Turn> turns, double along) {
   }
   return null;
 }
+
+/// Seconds from a runner passing a point to feeling or hearing a cue about
+/// it: the wait for the next GPS fix, the fix reaching the app, and the
+/// phone starting to buzz and speak.
+const _cueDelay = 1.5;
+
+/// Faster than any runner (m/s): a GPS glitch.
+const _maxCueSpeed = 8.0;
+
+/// How far (m) a runner at [speed] (m/s) gets while a turn cue reaches
+/// them, so cues can come that much early. 0 when the speed is unknown.
+double turnCueLeadMeters(double speed) =>
+    speed > 0 ? math.min(speed, _maxCueSpeed) * _cueDelay : 0;

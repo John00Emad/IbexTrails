@@ -274,6 +274,8 @@ class RunSession extends ChangeNotifier {
     startedAt ??= DateTime.now();
     if (fuel == null) _startFuel();
     _tick ??= Timer.periodic(const Duration(seconds: 10), (_) => _onTick());
+    // Ready to speak before the first turn warning.
+    _voice?.prepare();
     final source = locationSource;
     if (source == null) {
       await notifier.requestPermission();
@@ -440,7 +442,9 @@ class RunSession extends ChangeNotifier {
 
   /// Warns [AppSettings.turnWarnMeters] before each turn (vibration, voice,
   /// and a notification when the screen is off), and buzzes again right at
-  /// the turn. Quiet while off route: the off-route alarm takes over.
+  /// the turn. Both go by where the runner will be when the cue reaches
+  /// them, so they come in time when running fast. Quiet while off route:
+  /// the off-route alarm takes over.
   void _updateTurnCue(RouteMatch m) {
     final c = course;
     if (c == null ||
@@ -455,20 +459,20 @@ class RunSession extends ChangeNotifier {
     nextTurn = next;
     if (next == null) return;
     final t = next.turn;
-    if (next.distance <= settings.turnWarnMeters && _turnWarned.add(t.id)) {
+    final ahead = math.max(
+      0.0,
+      next.distance - turnCueLeadMeters(fix?.speed ?? 0),
+    );
+    if (ahead <= settings.turnWarnMeters && _turnWarned.add(t.id)) {
       HapticFeedback.heavyImpact();
-      if (settings.voiceCues) _voice?.say(t.spoken(next.distance));
+      if (settings.voiceCues) _voice?.say(t.spoken(ahead));
       final inBackground =
           WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
       if (inBackground) {
-        notifier.info(
-          NoteId.turn,
-          t.label,
-          'In ${formatDistance(next.distance)}',
-        );
+        notifier.info(NoteId.turn, t.label, 'In ${formatDistance(ahead)}');
       }
     }
-    if (next.distance <= 15 && _turnBuzzed.add(t.id)) {
+    if (ahead <= 15 && _turnBuzzed.add(t.id)) {
       HapticFeedback.heavyImpact();
     }
   }

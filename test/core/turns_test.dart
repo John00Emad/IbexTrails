@@ -108,4 +108,32 @@ void main() {
     expect(findNextTurn(turns, 1100), isNull);
     expect(detectTurns(route(eastLine(100))), isEmpty);
   });
+
+  test('a turn that is right here is "now"', () {
+    const right = Turn(id: 0, along: 500, change: 90, kind: TurnKind.turn);
+    expect(right.spoken(8), 'Turn right in 10 metres');
+    expect(right.spoken(4), 'Turn right now');
+    expect(right.spoken(0), 'Turn right now');
+    const zig = Turn(
+      id: 1,
+      along: 500,
+      change: -70,
+      kind: TurnKind.switchbacks,
+      until: 800,
+    );
+    expect(zig.spoken(60), 'Switchbacks ahead in 60 metres');
+    expect(zig.spoken(2), 'Switchbacks now');
+  });
+
+  test('cues come early by the distance run before they reach you', () {
+    // 1.5 s at the runner's speed.
+    expect(turnCueLeadMeters(4), closeTo(6, 1e-9));
+    expect(turnCueLeadMeters(1), closeTo(1.5, 1e-9));
+    // The speed is unknown: no lead.
+    expect(turnCueLeadMeters(0), 0);
+    expect(turnCueLeadMeters(-1), 0);
+    expect(turnCueLeadMeters(double.nan), 0);
+    // A GPS glitch can't bring a cue far forward.
+    expect(turnCueLeadMeters(40), closeTo(12, 1e-9));
+  });
 }

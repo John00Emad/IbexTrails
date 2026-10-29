@@ -48,41 +48,44 @@ class LocationService {
   static Future<bool> openLocationSettings() =>
       Geolocator.openLocationSettings();
 
-  /// Stream of GPS fixes suitable for running navigation.
-  static Stream<Position> track() {
-    final LocationSettings settings;
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      settings = AndroidSettings(
-        accuracy: LocationAccuracy.best,
-        distanceFilter: 3,
-        intervalDuration: const Duration(seconds: 2),
-        foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationTitle: 'IbexTrails is tracking your run',
-          notificationText:
-              'Navigation and group tracking stay active '
-              'while the screen is off.',
-          notificationChannelName: 'Run tracking',
-          enableWakeLock: true,
-          setOngoing: true,
+  /// Stream of GPS fixes suitable for running navigation: every fix the
+  /// receiver makes, about one a second, however little you moved. The map,
+  /// the stats and turn warnings keep up even when hiking up a steep climb;
+  /// the run itself ignores GPS jitter.
+  static Stream<Position> track() => Geolocator.getPositionStream(
+    locationSettings: settingsFor(kIsWeb ? null : defaultTargetPlatform),
+  );
+
+  /// The location request on [platform] (null on the web).
+  @visibleForTesting
+  static LocationSettings settingsFor(TargetPlatform? platform) =>
+      switch (platform) {
+        TargetPlatform.android => AndroidSettings(
+          accuracy: LocationAccuracy.best,
+          // No distance filter: it holds fixes back while walking slowly.
+          distanceFilter: 0,
+          intervalDuration: const Duration(seconds: 1),
+          foregroundNotificationConfig: const ForegroundNotificationConfig(
+            notificationTitle: 'IbexTrails is tracking your run',
+            notificationText:
+                'Navigation and group tracking stay active '
+                'while the screen is off.',
+            notificationChannelName: 'Run tracking',
+            enableWakeLock: true,
+            setOngoing: true,
+          ),
         ),
-      );
-    } else if (!kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.iOS ||
-            defaultTargetPlatform == TargetPlatform.macOS)) {
-      settings = AppleSettings(
-        accuracy: LocationAccuracy.best,
-        activityType: ActivityType.fitness,
-        distanceFilter: 3,
-        pauseLocationUpdatesAutomatically: false,
-        showBackgroundLocationIndicator: true,
-        allowBackgroundLocationUpdates: true,
-      );
-    } else {
-      settings = const LocationSettings(
-        accuracy: LocationAccuracy.best,
-        distanceFilter: 3,
-      );
-    }
-    return Geolocator.getPositionStream(locationSettings: settings);
-  }
+        TargetPlatform.iOS || TargetPlatform.macOS => AppleSettings(
+          accuracy: LocationAccuracy.best,
+          activityType: ActivityType.fitness,
+          distanceFilter: 0,
+          pauseLocationUpdatesAutomatically: false,
+          showBackgroundLocationIndicator: true,
+          allowBackgroundLocationUpdates: true,
+        ),
+        _ => const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          distanceFilter: 0,
+        ),
+      };
 }

@@ -9,7 +9,7 @@ final _t0 = DateTime(2026, 10, 18, 7);
 /// Pace range 6:00–7:00 /km: the virtual runner goes at 6:30.
 const _plan = PacerPlan(enabled: true, fastest: 360, slowest: 420);
 
-/// A runner with a GPS fix every 2 s, as on Android.
+/// A runner with a GPS fix every 2 s.
 class _Runner {
   _Runner(this.pacer);
   final VirtualPacer pacer;

@@ -26,8 +26,11 @@ class Voice {
     }
   }
 
+  /// Sets up speech ahead of the first cue, so that one isn't held up.
+  Future<void> prepare() => _init ??= _setUp();
+
   Future<void> say(String text) async {
-    await (_init ??= _setUp());
+    await prepare();
     try {
       await _tts?.stop();
       await _tts?.speak(text);
