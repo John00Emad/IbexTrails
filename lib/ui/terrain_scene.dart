@@ -84,11 +84,13 @@ abstract final class TerrainScene {
 
   /// Everything that moves, for `ibex.update`. Only the recorded track
   /// points from [recordedFrom] on are included (the page keeps the rest).
+  /// [heading] turns your arrow (degrees from north); a dot while null.
   static Map<String, Object?> live(
     RunSession s, {
     required DateTime now,
     required int recordedFrom,
     String? selected,
+    double? heading,
   }) {
     final route = s.route;
     final match = s.match;
@@ -148,7 +150,7 @@ abstract final class TerrainScene {
               'lon': _r(f.longitude),
               'lat': _r(f.latitude),
               'acc': f.accuracy,
-              'heading': f.speed > 0.7 ? f.heading : null,
+              'heading': heading,
             },
       'accuracy': f == null
           ? null

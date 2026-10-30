@@ -5,6 +5,8 @@
 //                        app's local tile server)
 //   ibex.setRoute(route) the route line, start/finish and sharp turns
 //   ibex.update(live)    you, the group, checkpoints, tracks (about 1/s)
+//   ibex.heading(deg)    which way your arrow points, between updates
+//                        (the compass turns it up to 10 times a second)
 //   ibex.camera(cmd)     fit / center / view
 // and hears back through IbexBridge.postMessage: ready, select, gesture.
 //
@@ -412,19 +414,40 @@ function drawLiveMarkers() {
     }, { anchor: 'top', offset: [0, -14] });
   }
 
-  const me = live.me;
-  if (me) {
+  if (live.me) {
     keep.add('l:me');
-    const hasHeading = me.heading != null;
-    const marker = putMarker('l:me', [me.lon, me.lat], `${hasHeading}`, () => {
-      const e = el('div', 'ibx-me');
-      if (hasHeading) e.append(svg(ICON.nav));
-      e.append(el('div', 'ibx-me-dot'));
-      return e;
-    }, { anchor: 'center', rotationAlignment: 'map', pitchAlignment: 'viewport' });
-    marker.setRotation(hasHeading ? me.heading : 0);
+    drawMe(live.me);
   }
   prune('l:', keep);
+}
+
+// You: an arrow pointing the way you face, or a dot while that's unknown.
+// The arrow stands up to face you, so it doesn't shrink to a sliver on a
+// tilted map, and is turned to where your heading runs on the ground.
+function drawMe(me) {
+  const hasHeading = me.heading != null;
+  const marker = putMarker('l:me', [me.lon, me.lat], `${hasHeading}`, () => {
+    if (!hasHeading) return el('div', 'ibx-me-dot');
+    const e = el('div', 'ibx-me');
+    e.append(svg(ICON.nav));
+    return e;
+  }, { anchor: 'center' });
+  if (hasHeading) marker.setRotation(onScreen(me.heading));
+}
+
+// Which way a heading (degrees from north) points on the screen, with the
+// map turned and tilted as it is now. Tilting squashes the ground towards
+// the horizon, so e.g. north-east looks flatter than 45°.
+function onScreen(heading) {
+  const a = (heading - map.getBearing()) * Math.PI / 180;
+  const squash = Math.cos(map.getPitch() * Math.PI / 180);
+  return Math.atan2(Math.sin(a), Math.cos(a) * squash) * 180 / Math.PI;
+}
+
+// Turning or tilting the map turns your arrow with it.
+function turnMe() {
+  const me = state.live && state.live.me;
+  if (me && me.heading != null) drawMe(me);
 }
 
 // ---- Map -------------------------------------------------------------------
@@ -446,6 +469,8 @@ function createMap() {
     }
   });
   map.on('style.load', applyData);
+  map.on('rotate', turnMe);
+  map.on('pitch', turnMe);
   map.on('movestart', (e) => {
     if (e.originalEvent) post({ type: 'gesture' });
   });
@@ -495,6 +520,13 @@ const ibex = {
     if (!map) return;
     applyData();
     drawLiveMarkers();
+  },
+
+  heading(h) {
+    const me = state.live && state.live.me;
+    if (!me) return;
+    me.heading = h;
+    if (map) drawMe(me);
   },
 
   camera(c) {

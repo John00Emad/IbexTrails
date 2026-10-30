@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'brand.dart';
+import 'services/compass.dart';
 import 'services/notifications.dart';
 import 'services/settings.dart';
 import 'ui/home_screen.dart';
@@ -11,18 +12,25 @@ class AppScope extends InheritedWidget {
     super.key,
     required this.settings,
     required this.notifier,
+    this.compass,
     required super.child,
   });
 
   final AppSettings settings;
   final Notifier notifier;
 
+  /// Which way the phone faces (degrees from north), for your arrow on the
+  /// map. Tests leave it out: they have no sensors.
+  final Stream<double> Function()? compass;
+
   static AppScope of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<AppScope>()!;
 
   @override
   bool updateShouldNotify(AppScope oldWidget) =>
-      settings != oldWidget.settings || notifier != oldWidget.notifier;
+      settings != oldWidget.settings ||
+      notifier != oldWidget.notifier ||
+      compass != oldWidget.compass;
 }
 
 /// Map and status colours. Status colours stay conventional (green ok,
@@ -150,6 +158,7 @@ class IbexTrailsApp extends StatelessWidget {
     return AppScope(
       settings: settings,
       notifier: notifier,
+      compass: Compass.headings,
       child: MaterialApp(
         title: Brand.appName,
         debugShowCheckedModeBanner: false,

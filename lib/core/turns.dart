@@ -77,13 +77,6 @@ TurnKind _kindOf(double change) {
   return TurnKind.slight;
 }
 
-double _signedDelta(double from, double to) {
-  var d = (to - from) % 360;
-  if (d > 180) d -= 360;
-  if (d <= -180) d += 360;
-  return d;
-}
-
 /// Finds turns by comparing the heading 30 m before and 30 m after points
 /// every 10 m along the route. Small wiggles (GPS noise, gentle bends) are
 /// ignored; 3 or more turns in quick succession become one "switchbacks"
@@ -101,7 +94,7 @@ List<Turn> detectTurns(TrailRoute route) {
     if (distanceBetween(a, b) < _arm / 3 || distanceBetween(b, c) < _arm / 3) {
       continue;
     }
-    final change = _signedDelta(bearingBetween(a, b), bearingBetween(b, c));
+    final change = headingChange(bearingBetween(a, b), bearingBetween(b, c));
     if (change.abs() >= _minChange) candidates.add((d, change));
   }
 
